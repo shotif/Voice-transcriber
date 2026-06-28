@@ -177,15 +177,12 @@ async function transcribeToJSON(
         400,
       );
     }
-    let f = inbound.get("file") ?? inbound.get("audio");
+    let f: FormDataEntryValue | null = inbound.get("file") ?? inbound.get("audio");
     // Be tolerant of any field name: take the first File-valued field.
     if (!(f instanceof File)) {
-      for (const v of inbound.values()) {
-        if (v instanceof File) {
-          f = v;
-          break;
-        }
-      }
+      inbound.forEach((v) => {
+        if (!(f instanceof File) && v instanceof File) f = v;
+      });
     }
     if (!(f instanceof File)) {
       return json({ error: "No audio file found in the request." }, 400);
