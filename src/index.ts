@@ -1,14 +1,16 @@
 /**
- * POST /api/transcribe
+ * Glas — Cloudflare Worker (Static Assets + API).
  *
- * Same-origin proxy to the ElevenLabs Speech-to-Text ("Scribe") API.
- * The browser uploads an audio file as multipart/form-data; this function
- * forwards it to ElevenLabs with the secret API key (which lives ONLY in the
- * Cloudflare Pages environment, never in the client bundle) and returns the
- * Croatian transcript.
+ * Cloudflare unified Workers & Pages: this project deploys as a single Worker
+ * that serves the static frontend from the `public/` directory (via the ASSETS
+ * binding) and handles the same-origin API route POST /api/transcribe.
+ *
+ * The Worker forwards the uploaded audio to ElevenLabs Scribe with the secret
+ * API key — which lives ONLY as a Worker secret/variable, never in the client
+ * bundle — and returns the Croatian transcript.
  *
  * ElevenLabs request shape (verified against the current docs, June 2026):
- *   POST https://api.elevenlabs.io/v1/speech-to-text
+ *   POST {ELEVENLABS_BASE_URL}/v1/speech-to-text
  *   Header: xi-api-key: <ELEVENLABS_API_KEY>
  *   multipart/form-data fields:
  *     file          -> the audio (required)
@@ -18,8 +20,9 @@
  */
 
 interface Env {
+  ASSETS: Fetcher; // static assets binding (the `public/` directory)
   ELEVENLABS_API_KEY: string;
-  // Optional overrides (set in the Pages dashboard if you ever need them):
+  // Optional overrides (set in the dashboard under Settings > Variables):
   ELEVENLABS_MODEL_ID?: string;
   ELEVENLABS_LANGUAGE_CODE?: string;
   // Base API host. Use the EU data-residency host for EU accounts:
@@ -40,14 +43,39 @@ const json = (data: unknown, status = 200): Response =>
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 
-export const onRequestPost: PagesFunction<Env> = async (context) => {
-  const { request, env } = context;
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
 
+    if (url.pathname === "/api/transcribe") {
+      if (request.method === "POST") return handleTranscribe(request, env);
+      if (request.method === "GET") return handleHealth(env);
+      return json({ error: "Method not allowed." }, 405);
+    }
+
+    // Everything else is a static asset (index.html, app.js, sw.js, icons, …).
+    return env.ASSETS.fetch(request);
+  },
+};
+
+function handleHealth(env: Env): Response {
+  return json({
+    ok: true,
+    route: "/api/transcribe",
+    method: "POST multipart/form-data (field: file)",
+    model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
+    language_code: env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE,
+    base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
+    key_configured: Boolean(env.ELEVENLABS_API_KEY),
+  });
+}
+
+async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   if (!env.ELEVENLABS_API_KEY) {
     return json(
       {
         error:
-          "Server is missing ELEVENLABS_API_KEY. Add it as an encrypted environment variable in the Cloudflare Pages project settings.",
+          "Server is missing ELEVENLABS_API_KEY. Add it under the project's Settings > Variables and Secrets, then redeploy.",
       },
       500,
     );
@@ -121,9 +149,11 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     const hint =
       elevenRes.status === 401
         ? "The ELEVENLABS_API_KEY appears to be invalid."
-        : elevenRes.status === 422
-          ? "The audio format may be unsupported or corrupted."
-          : "";
+        : elevenRes.status === 403
+          ? "Check the key and that ELEVENLABS_BASE_URL matches your account region (EU vs global)."
+          : elevenRes.status === 422
+            ? "The audio format may be unsupported or corrupted."
+            : "";
     return json(
       {
         error:
@@ -150,16 +180,4 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     language_probability: result?.language_probability ?? null,
     model_id: modelId,
   });
-};
-
-// Friendly response for accidental GETs / health checks.
-export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
-  json({
-    ok: true,
-    route: "/api/transcribe",
-    method: "POST multipart/form-data (field: file)",
-    model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
-    language_code: env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE,
-    base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
-    key_configured: Boolean(env.ELEVENLABS_API_KEY),
-  });
+}

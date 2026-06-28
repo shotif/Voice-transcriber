@@ -1,10 +1,18 @@
-# Cloudflare Pages config.
-# The dashboard is the primary deploy path (see SETUP.md). This file lets the
-# optional `wrangler` CLI know the project name and where the static output is,
-# and pins a compatibility date for the Pages Functions runtime.
+# Cloudflare Worker config (unified Workers & Pages).
+# Deploys a single Worker that serves the static frontend from ./public via the
+# ASSETS binding and handles the API route /api/transcribe (see src/index.ts).
+#
+# Deploy with the default command in Cloudflare's Git build:  npx wrangler deploy
 name = "glas"
+main = "src/index.ts"
 compatibility_date = "2026-06-28"
-pages_build_output_dir = "public"
 
-# Secrets (ELEVENLABS_API_KEY) are NOT defined here — they are set as encrypted
-# secrets in the dashboard, or via `wrangler pages secret put ELEVENLABS_API_KEY`.
+# Static frontend assets. Requests that match a file here are served directly;
+# anything else (e.g. /api/transcribe) runs the Worker in src/index.ts.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Secrets (ELEVENLABS_API_KEY) and vars (ELEVENLABS_BASE_URL) are NOT defined
+# here — set them in the dashboard (Settings > Variables and Secrets) or via:
+#   npx wrangler secret put ELEVENLABS_API_KEY

@@ -1,6 +1,6 @@
 # Glas — Setup, from empty to live
 
-This guide takes you from **nothing** to a **live `*.pages.dev` URL** that
+This guide takes you from **nothing** to a **live `*.workers.dev` URL** that
 transcribes Croatian voice notes, then installs it on Android so you can share
 WhatsApp voice messages straight into it.
 
@@ -12,8 +12,8 @@ WhatsApp voice messages straight into it.
 The **Cloudflare dashboard** is the primary path. Optional `wrangler` CLI steps
 are in the boxes marked *CLI alternative*.
 
-> Everything runs on **one** Cloudflare Pages project: it serves the static
-> frontend **and** the `/api/transcribe` backend (a Pages Function). Because
+> Everything runs on **one** Cloudflare Worker: it serves the static frontend
+> from `public/` **and** the `/api/transcribe` backend (`src/index.ts`). Because
 > they're the same origin, there's **no CORS** to configure. Your ElevenLabs key
 > is stored only as an encrypted Cloudflare secret — never in the code.
 
@@ -48,7 +48,7 @@ git push -u origin main
 > in step 2 simply pick that branch as the **Production branch**. Cloudflare can
 > build from any branch you choose.
 
-Refresh the GitHub page — you should see `functions/`, `public/`, `SETUP.md`, etc.
+Refresh the GitHub page — you should see `src/`, `public/`, `wrangler.toml`, `SETUP.md`, etc.
 
 > 🔒 **Sanity check:** open `.env.example` on GitHub — it should contain only the
 > placeholder `your_elevenlabs_api_key_here`, never your real key. Your real key
@@ -56,119 +56,132 @@ Refresh the GitHub page — you should see `functions/`, `public/`, `SETUP.md`, 
 
 ---
 
-## 2. Create the Cloudflare Pages project & connect GitHub
+## 2. Create the Cloudflare project & connect GitHub
+
+> Cloudflare has unified Workers & Pages. New accounts only get the **Workers**
+> "Import a repository" flow (no separate Pages tab). This project is built to
+> deploy that way — a single Worker that serves the static frontend from
+> `public/` **and** handles `/api/transcribe` (see `src/index.ts` +
+> `wrangler.toml`). Use the **default** deploy command; don't change it to
+> `wrangler pages deploy`.
 
 1. Sign in at <https://dash.cloudflare.com>.
 2. In the left sidebar click **Workers & Pages**.
-3. Click **Create** (blue button) → choose the **Pages** tab → **Connect to Git**.
-4. **Connect GitHub** → authorize Cloudflare → choose **Only select
-   repositories** → pick `voice-transcriber` → **Install & Authorize**.
-5. Back in Cloudflare, select that repository → **Begin setup**.
-
-### Build settings — type these exactly
+3. Click **Create** → **Import a repository** (Workers) → connect GitHub →
+   choose **Only select repositories** → pick `Voice-transcriber` →
+   **Install & Authorize**.
+4. Select the repo. Cloudflare reads `wrangler.toml`, so the defaults are right:
 
 | Field | Value |
 |---|---|
-| **Project name** | `glas` (this becomes `glas.pages.dev`; pick what you like) |
-| **Production branch** | `main` (or your Claude branch) |
-| **Framework preset** | **None** |
-| **Build command** | *(leave empty)* |
-| **Build output directory** | **`public`** |
-| **Root directory** | *(leave as the repo root, i.e. `/`)* |
+| **Project / Worker name** | `glas` |
+| **Production branch** | `main` |
+| **Build command** | *(leave empty — no build step)* |
+| **Deploy command** | **`npx wrangler deploy`** (the default — leave it) |
+| **Non-production branch deploy command** | `npx wrangler versions upload` (default) |
+| **API token** | **Create new token** (let Cloudflare auto-generate it) |
 
-Why these values:
-- There is **no build step** — the frontend is plain HTML/CSS/JS that's served
-  as-is, and Cloudflare compiles `functions/` automatically. So the build
-  command is empty.
-- The static files live in **`public/`**, so that's the output directory. ⚠️ This
-  is the #1 thing people get wrong — if you point it at the repo root, your pages
-  won't serve correctly.
+⚠️ **Do not** set the deploy command to `npx wrangler pages deploy …` — the
+auto-generated token is Workers-scoped, so a `pages deploy` fails with
+`Authentication error [code: 10000]`. The default `npx wrangler deploy` works
+because `wrangler.toml` declares `main = "src/index.ts"` and an `[assets]`
+binding pointing at `public/`.
 
 Don't click the final deploy yet — **add the secret first** (next step) so the
-very first deploy already has the key. (If you do deploy first, that's fine too;
-just re-deploy after adding the secret.)
+very first deploy already has the key. (If you deploy first, that's fine too;
+just redeploy after adding the variables.)
 
-> **CLI alternative (instead of steps 2–3 dashboard):**
+> **CLI alternative (instead of the dashboard):**
 > ```bash
 > npm install
 > npx wrangler login
-> npx wrangler pages project create glas --production-branch main
-> npx wrangler pages secret put ELEVENLABS_API_KEY        # paste key when prompted
-> npx wrangler pages deploy public                        # build output dir = public
+> npx wrangler secret put ELEVENLABS_API_KEY      # paste key when prompted
+> npx wrangler deploy                             # reads wrangler.toml
 > ```
 > Connecting the GitHub repo in the dashboard is still recommended so you get
 > auto-deploy on push.
 
 ---
 
-## 3. Add `ELEVENLABS_API_KEY` as an encrypted secret
+## 3. Add the API key (and EU host if needed) as variables
 
 This is the **only** place your real key lives.
 
 1. Open your project: **Workers & Pages → `glas`**.
-2. Go to the **Settings** tab.
-3. Find **Variables and Secrets** (older UIs: **Environment variables**).
-4. Click **+ Add**.
-   - **Variable name:** `ELEVENLABS_API_KEY`  *(exact spelling, all caps)*
-   - **Value:** paste your real ElevenLabs key (looks like `sk_…`)
-   - **Type:** choose **Secret** / **Encrypt** so the value is hidden after saving.
-5. **Environment:** add it for **Production**. Then repeat (or use the
-   "apply to all environments" toggle if shown) so it's **also set for
-   Preview** — otherwise preview deployments from branches/PRs won't transcribe.
-6. Click **Save**.
+2. Go to the **Settings** tab → **Variables and Secrets** (older UIs:
+   **Environment variables**).
+3. Click **+ Add** and create these:
 
-> If you added the variable **after** the first deploy, trigger a fresh deploy so
-> the new value is picked up: **Deployments → … → Retry deployment**, or just
-> push a commit.
+| Name | Value | Type |
+|---|---|---|
+| `ELEVENLABS_API_KEY` | your real key (`sk_…`) | **Secret / Encrypt** |
+| `ELEVENLABS_BASE_URL` | `https://api.eu.residency.elevenlabs.io` | plain (or Secret) — **only if your ElevenLabs account uses EU data residency** |
 
-Optional extra variables (only if ElevenLabs ever changes things — defaults are
-baked in, so you normally add nothing):
+4. **Environment:** add each for **Production**, then again for **Preview** (or
+   use "apply to all environments" if shown) — otherwise preview deploys won't
+   transcribe.
+5. Click **Save**.
+
+> ⚠️ **EU accounts:** an EU-residency API key works **only** against the EU host.
+> If you leave `ELEVENLABS_BASE_URL` unset, the app uses the global host
+> `https://api.elevenlabs.io` and an EU key will fail (typically HTTP 401/403).
+> If your account is *not* EU, skip this variable.
+
+> If you added variables **after** the first deploy, trigger a fresh deploy so
+> they're picked up: **Deployments → … → Retry deployment**, or just push a commit.
+
+Optional extra variables (defaults are baked in, so you normally add nothing):
 - `ELEVENLABS_MODEL_ID` — defaults to `scribe_v2`.
 - `ELEVENLABS_LANGUAGE_CODE` — defaults to `hr` (Croatian).
 
-> **CLI alternative:** `npx wrangler pages secret put ELEVENLABS_API_KEY`
-> (and again with `--env preview` for the preview environment).
+> **CLI alternative:** `npx wrangler secret put ELEVENLABS_API_KEY`, and for the
+> base URL `npx wrangler secret put ELEVENLABS_BASE_URL` (or add it as a `[vars]`
+> entry in `wrangler.toml`).
 
 ---
 
-## 4. Confirm the Function and `/api/transcribe` route are live
+## 4. Confirm the `/api/transcribe` route is live
 
 1. Click **Save and Deploy** (or **Deployments → Retry** if you deployed earlier).
-2. Wait for the build to go **Success** (usually well under a minute).
-3. Cloudflare auto-detects the Pages Function. To confirm: open
-   **`https://<your-project>.pages.dev/api/transcribe`** in a browser (a plain
-   **GET**). You should see JSON like:
+2. Wait for the build/deploy to go **Success** (usually well under a minute). The
+   log should show `npx wrangler deploy` uploading your Worker + assets.
+3. To confirm the API: open **`https://<your-worker>.workers.dev/api/transcribe`**
+   (or your custom `*.pages.dev`/domain) in a browser — a plain **GET**. You
+   should see JSON like:
 
    ```json
    { "ok": true, "route": "/api/transcribe",
      "model_id": "scribe_v2", "language_code": "hr",
+     "base_url": "https://api.eu.residency.elevenlabs.io",
      "key_configured": true }
    ```
 
-   - `key_configured: true` ✅ means your secret is wired up correctly.
-   - `key_configured: false` ❌ means the secret isn't set for this environment —
+   - `key_configured: true` ✅ — your secret is wired up.
+   - `base_url` shows EU ✅ — your EU host variable is active (if you set it).
+   - `key_configured: false` ❌ — the variable isn't set for this environment;
      go back to step 3 and redeploy.
 
 ---
 
 ## 5. First deploy & finding your live URL
 
-1. In your project, open the **Deployments** tab.
-2. The latest **Production** deployment shows a link like
-   **`https://glas.pages.dev`** (your project name) — click it.
+1. In your project, open the **Deployments** (or **Metrics/Settings**) tab.
+2. The live URL is shown near the top — a Worker uses
+   **`https://glas.<your-subdomain>.workers.dev`**. Click it. (You can also add a
+   custom domain later under **Settings → Domains & Routes**.)
 3. The app loads. Tap the drop zone, pick a Croatian `.opus`/`.m4a`/`.mp3`,
    tap **Transcribe Croatian**, and you should get Croatian text with a **Copy**
    button. 🎉
 
-Every deployment also gets its own preview URL like
-`https://<hash>.glas.pages.dev` — handy for testing a branch before it's live.
+Each branch push also produces a **preview version** URL — handy for testing
+before it's promoted to production.
 
 ---
 
 ## 6. Install the PWA on Android & use the Share Target
 
 ### Install
-1. On your Android phone, open **Chrome** and visit your `*.pages.dev` URL.
+1. On your Android phone, open **Chrome** and visit your `*.workers.dev` URL.
 2. Tap the **⋮** menu → **Add to Home screen** (or **Install app**) →
    **Install**.
 3. A **Glas** icon appears on your home screen. Open it once — it runs
@@ -194,9 +207,9 @@ Every deployment also gets its own preview URL like
 ## 7. Auto-deploy on push, and rolling back
 
 ### Auto-deploy (this is your CI/CD)
-- Cloudflare Pages watches your GitHub repo. **Every push to `main` auto-builds
-  and deploys to production.** Pushes to other branches create **preview**
-  deployments. No GitHub Actions, no extra config.
+- Cloudflare Workers Builds watches your GitHub repo. **Every push to `main`
+  auto-builds and deploys to production.** Pushes to other branches create
+  **preview versions**. No GitHub Actions, no extra config.
 - Typical loop:
   ```bash
   git add .
@@ -222,14 +235,22 @@ The secret isn't set for the environment you're hitting. Re-do step 3 for both
 **Production** and **Preview**, then **redeploy** (secrets apply on the next
 build, not retroactively).
 
-**"Transcription failed (HTTP 401)" / invalid key.**
-The key value is wrong or revoked. Re-copy it from ElevenLabs → **Profile → API
-Keys**, update the Cloudflare secret, redeploy.
+**"Transcription failed (HTTP 401/403)" / invalid key.**
+Either the key is wrong/revoked, **or** there's a region mismatch: an EU
+data-residency key only works against the EU host. Re-copy the key from
+ElevenLabs → **Profile → API Keys**, and make sure `ELEVENLABS_BASE_URL` is set
+to `https://api.eu.residency.elevenlabs.io` for EU accounts (check the `base_url`
+field in the step-4 health JSON). Update the variable, then redeploy.
+
+**Deploy fails with `Authentication error [code: 10000]`.**
+The deploy command was changed to `npx wrangler pages deploy …`, but the
+auto-generated token is Workers-scoped. Set the **Deploy command** back to the
+default **`npx wrangler deploy`** (Settings → **Builds** → edit) and redeploy.
 
 **The page loads but assets are missing / 404s, or `/api/transcribe` 404s.**
-Almost always the **Build output directory** is wrong. It must be **`public`**
-(Settings → **Builds & deployments** → edit configuration), and `functions/`
-must sit at the **repo root**. Save and redeploy.
+Check `wrangler.toml`: it must have `main = "src/index.ts"` and an `[assets]`
+block with `directory = "./public"` and `binding = "ASSETS"`. The deploy command
+must be `npx wrangler deploy`. Save and redeploy.
 
 **Share Target (Glas) doesn't appear in WhatsApp's share sheet.**
 - You must **install the PWA first** (step 6) — the target only registers once
@@ -238,7 +259,7 @@ must sit at the **repo root**. Save and redeploy.
 - Make sure you're sharing the **audio file** (long-press the voice message →
   three-dot **Share**), not forwarding the chat as text.
 - If it still doesn't show, uninstall and reinstall the PWA to refresh the
-  manifest, and confirm the site is served over **HTTPS** (pages.dev always is).
+  manifest, and confirm the site is served over **HTTPS** (workers.dev always is).
 
 **"That doesn't look like an audio file" or "unsupported audio format".**
 Supported: `.opus`, `.ogg`, `.oga`, `.m4a`, `.mp3`, `.wav` (and common
@@ -270,14 +291,14 @@ Specifically, please sanity-check these once when you set up your key:
    shows which model id is active.
 2. **Field names.** The request uses multipart fields **`file`**,
    **`model_id`**, and **`language_code`** (Croatian = `hr`), with auth header
-   **`xi-api-key`**, against **`POST https://api.elevenlabs.io/v1/speech-to-text`**.
-   These match the docs as of writing; if a future API version changes a field
-   name, it's a one-line edit in `functions/api/transcribe.ts`.
-3. **Cloudflare Pages UI labels** occasionally get renamed (e.g. "Environment
-   variables" → "Variables and Secrets"). The **locations** (Project → Settings)
-   are stable; menu wording may differ slightly from the screenshots in your
-   dashboard.
+   **`xi-api-key`**, against **`POST {base}/v1/speech-to-text`**. These match the
+   docs as of writing; if a future API version changes a field name, it's a
+   one-line edit in `src/index.ts`.
+3. **Cloudflare UI labels** occasionally get renamed (e.g. "Environment
+   variables" → "Variables and Secrets"; the unified "Import a repository"
+   Workers flow). The **locations** (Project → Settings) are stable; menu wording
+   may differ slightly from this guide.
 
 Everything else (same-origin proxy, no-CORS design, PWA install, share target,
 localStorage history) is implemented and was exercised locally against the real
-Cloudflare Pages runtime via `wrangler pages dev`.
+Workers runtime via `wrangler dev`.

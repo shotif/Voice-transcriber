@@ -5,13 +5,13 @@
   "description": "Glas — a Croatian voice-note transcriber on Cloudflare Pages + ElevenLabs Scribe.",
   "type": "module",
   "scripts": {
-    "build": "echo 'No build step — static assets in /public are served as-is; Pages compiles /functions automatically.'",
-    "dev": "wrangler pages dev public",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240620.0",
+    "@cloudflare/workers-types": "^4.20250620.0",
     "typescript": "^5.5.0",
-    "wrangler": "^3.60.0"
+    "wrangler": "^4.20.0"
   }
 }
