@@ -95,6 +95,8 @@ function handleHealth(env: Env): Response {
     base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     key_configured: Boolean(env.ELEVENLABS_API_KEY),
     passcode_required: Boolean(env.APP_PASSCODE),
+    db_bound: Boolean(env.DB),
+    admin_password_set: Boolean(env.ADMIN_PASSWORD),
     admin_enabled: Boolean(env.DB && env.ADMIN_PASSWORD),
   });
 }
