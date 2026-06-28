@@ -13,6 +13,12 @@ compatibility_date = "2026-06-28"
 directory = "./public"
 binding = "ASSETS"
 
-# Secrets (ELEVENLABS_API_KEY) and vars (ELEVENLABS_BASE_URL) are NOT defined
-# here — set them in the dashboard (Settings > Variables and Secrets) or via:
+# Non-secret config. ELEVENLABS_BASE_URL is set here (not sensitive) so it always
+# survives a redeploy. This account uses ElevenLabs EU data residency, and an EU
+# key only works against the EU host. Remove/blank this for a global account.
+[vars]
+ELEVENLABS_BASE_URL = "https://api.eu.residency.elevenlabs.io"
+
+# The SECRET key is NOT here (never commit it). Set ELEVENLABS_API_KEY in the
+# dashboard (Settings > Variables and Secrets, type = Secret) or via:
 #   npx wrangler secret put ELEVENLABS_API_KEY
