@@ -29,4 +29,4 @@ ELEVENLABS_BASE_URL = "https://api.eu.residency.elevenlabs.io"
 [[d1_databases]]
 binding = "DB"
 database_name = "glas-log"
-database_id = "7a9c2f3e-1b4d-4e8a-9c3f-2d5e6f7a8b9c"
+database_id = "dbf1fdb9-d146-4648-af03-924ecd2dfadb"
