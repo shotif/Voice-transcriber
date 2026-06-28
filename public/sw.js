@@ -3,7 +3,7 @@
  * 2. Web Share Target: receives a POSTed audio file from Android's share sheet,
  *    stashes it in the Cache, and redirects into the transcribe flow.
  */
-const VERSION = "glas-v2";
+const VERSION = "glas-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = "glas-share"; // holds the most recently shared audio
 const SHARED_AUDIO_URL = "/__shared-audio"; // internal cache key, never fetched from network
@@ -20,7 +20,13 @@ const SHELL_ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_ASSETS)).then(() => self.skipWaiting()),
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      // Tolerant precache: a single failing asset must not abort SW install
+      // (which can otherwise stall PWA installation on some devices).
+      await Promise.allSettled(SHELL_ASSETS.map((u) => cache.add(u)));
+      await self.skipWaiting();
+    })(),
   );
 });
 
