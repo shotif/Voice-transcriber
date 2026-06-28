@@ -22,9 +22,14 @@ interface Env {
   // Optional overrides (set in the Pages dashboard if you ever need them):
   ELEVENLABS_MODEL_ID?: string;
   ELEVENLABS_LANGUAGE_CODE?: string;
+  // Base API host. Use the EU data-residency host for EU accounts:
+  //   https://api.eu.residency.elevenlabs.io
+  // Defaults to the global host. NOTE: an EU-residency API key only works
+  // against the EU host, so set this if your ElevenLabs account is EU.
+  ELEVENLABS_BASE_URL?: string;
 }
 
-const ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text";
+const DEFAULT_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_MODEL_ID = "scribe_v2";
 const DEFAULT_LANGUAGE_CODE = "hr"; // Croatian
 const MAX_BYTES = 100 * 1024 * 1024; // 100 MB guardrail; voice notes are tiny
@@ -71,6 +76,8 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   const modelId = env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID;
   const languageCode = env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE;
+  const baseUrl = (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const elevenUrl = `${baseUrl}/v1/speech-to-text`;
 
   const outbound = new FormData();
   // WhatsApp .opus blobs sometimes arrive with a generic type; give ElevenLabs
@@ -82,7 +89,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 
   let elevenRes: Response;
   try {
-    elevenRes = await fetch(ELEVENLABS_URL, {
+    elevenRes = await fetch(elevenUrl, {
       method: "POST",
       headers: { "xi-api-key": env.ELEVENLABS_API_KEY },
       body: outbound,
@@ -153,5 +160,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
     language_code: env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE,
+    base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     key_configured: Boolean(env.ELEVENLABS_API_KEY),
   });
