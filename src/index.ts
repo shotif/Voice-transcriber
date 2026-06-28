@@ -106,6 +106,34 @@ async function handleTranscribe(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  const res = await transcribeToJSON(request, env, ctx);
+
+  // Plain-text mode for the iOS Shortcut: `?format=text` (or Accept: text/plain)
+  // returns just the transcript as text/plain, so the Shortcut needs no JSON
+  // parsing — it copies the body straight to the clipboard.
+  const wantsText =
+    new URL(request.url).searchParams.get("format") === "text" ||
+    (request.headers.get("accept") || "").includes("text/plain");
+  if (!wantsText) return res;
+
+  let data: any = {};
+  try {
+    data = await res.clone().json();
+  } catch {
+    /* ignore */
+  }
+  const body = res.ok ? (data.text ?? "") : (data.error ?? `Error ${res.status}`);
+  return new Response(body, {
+    status: res.status,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+
+async function transcribeToJSON(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   // Shared access gate. When APP_PASSCODE is set, reject callers without the
   // matching x-app-passcode header before doing any work or touching the key.
   if (env.APP_PASSCODE) {

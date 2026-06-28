@@ -19,23 +19,29 @@ only as a human-readable reference of the actions. The supported path is:
 > **One person with an iPhone builds the shortcut once (below), then shares its
 > iCloud link** with everyone else. Build once, share forever — no Mac needed.
 
-## Build it (≈2 minutes, on any iPhone)
+## Build it (≈1 minute, on any iPhone)
 
-In the **Shortcuts** app → **+**, name it **Glas prijepis**:
+The Worker can return the transcript as **plain text** via `?format=text`, so the
+Shortcut needs no JSON parsing — just fetch, copy, show. In the **Shortcuts** app
+→ **+**, name it **Glas prijepis**:
 
 1. **Add Action → "Get Contents of URL"**:
-   - URL: `https://glas.shotif.workers.dev/api/transcribe`
+   - URL: `https://glas.shotif.workers.dev/api/transcribe?format=text`
    - Show More → Method **POST**
-   - Header: `x-app-passcode` = your access code (optionally `x-user-label` = name)
+   - Header — set **Key** = `x-app-passcode`, **Value** = your access code
+     (optionally a second header `x-user-label` = your name)
    - Request Body: **File** → value = **Shortcut Input**
-2. **Get Dictionary Value** → value for **text** in **Contents of URL**.
-3. **Copy to Clipboard**.
-4. **Quick Look** (to show the text).
-5. Tap **ⓘ** → enable **Show in Share Sheet** (accept Media + Files).
-6. **Done.**
+2. **Copy to Clipboard** (copies the URL contents).
+3. **Quick Look** (to show the text).
+4. Tap **ⓘ** → enable **Show in Share Sheet** (accept Media + Files).
+5. **Done.**
 
-The Worker accepts the shared file as a raw request body, so no multipart "Form"
-field is needed — Request Body = File = Shortcut Input is enough.
+No "Get Dictionary Value" needed — `?format=text` returns the raw transcript, so
+the response is copied directly. (Without `?format=text` the endpoint returns
+JSON `{ "text": ... }`, which is what the web app uses.)
+
+> ⚠️ Common mistake: putting the passcode in the header **Key** field. The Key
+> must be `x-app-passcode`; the passcode goes in the **Value** field.
 
 ## Share with friends
 
