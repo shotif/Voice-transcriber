@@ -170,11 +170,23 @@ async function transcribeToJSON(
       inbound = await request.formData();
     } catch {
       return json(
-        { error: "Expected multipart/form-data with an audio 'file' field." },
+        {
+          error:
+            "Couldn't read the audio. In the iOS Shortcut set Request Body to 'File' (= Shortcut Input), and share an actual voice note rather than running it empty.",
+        },
         400,
       );
     }
-    const f = inbound.get("file") ?? inbound.get("audio");
+    let f = inbound.get("file") ?? inbound.get("audio");
+    // Be tolerant of any field name: take the first File-valued field.
+    if (!(f instanceof File)) {
+      for (const v of inbound.values()) {
+        if (v instanceof File) {
+          f = v;
+          break;
+        }
+      }
+    }
     if (!(f instanceof File)) {
       return json({ error: "No audio file found in the request." }, 400);
     }
