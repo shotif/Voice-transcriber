@@ -26,6 +26,29 @@
         </div>
       </header>
 
+      <!-- Access code gate (shown only when the server requires a passcode) -->
+      <section id="unlock" class="card hidden">
+        <div class="result-head">
+          <span class="badge">🔒 Pristup</span>
+        </div>
+        <p class="dz-sub" id="unlockMsg" style="margin-bottom: 12px;">
+          Unesi pristupni kôd da koristiš transkripciju.
+        </p>
+        <form id="unlockForm" autocomplete="off">
+          <input
+            id="passcodeInput"
+            class="text-input"
+            type="password"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            placeholder="Pristupni kôd"
+          />
+          <button id="unlockBtn" class="primary-btn" type="submit">Otključaj</button>
+        </form>
+      </section>
+
       <!-- Upload / drop zone -->
       <section
         id="dropzone"
@@ -94,6 +117,7 @@
       <footer class="footer">
         <span id="installHint" class="hidden">Add to Home screen to share voice notes straight from WhatsApp.</span>
         <span class="footer-note">Audio is sent to ElevenLabs Scribe for transcription. Nothing is stored on a server.</span>
+        <button id="changeCode" class="link-btn hidden" type="button">Promijeni pristupni kôd</button>
       </footer>
     </main>
 

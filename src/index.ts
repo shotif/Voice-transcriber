@@ -22,6 +22,10 @@
 interface Env {
   ASSETS: Fetcher; // static assets binding (the `public/` directory)
   ELEVENLABS_API_KEY: string;
+  // Optional shared access code. If set, callers must send it as the
+  // `x-app-passcode` header or transcription is rejected (401). Leave unset to
+  // keep the endpoint open. Set it as a Secret in the dashboard to lock down.
+  APP_PASSCODE?: string;
   // Optional overrides (set in the dashboard under Settings > Variables):
   ELEVENLABS_MODEL_ID?: string;
   ELEVENLABS_LANGUAGE_CODE?: string;
@@ -42,6 +46,14 @@ const json = (data: unknown, status = 200): Response =>
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+
+// Length-constant string compare, to avoid leaking the passcode via timing.
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -67,10 +79,23 @@ function handleHealth(env: Env): Response {
     language_code: env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE,
     base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     key_configured: Boolean(env.ELEVENLABS_API_KEY),
+    passcode_required: Boolean(env.APP_PASSCODE),
   });
 }
 
 async function handleTranscribe(request: Request, env: Env): Promise<Response> {
+  // Shared access gate. When APP_PASSCODE is set, reject callers without the
+  // matching x-app-passcode header before doing any work or touching the key.
+  if (env.APP_PASSCODE) {
+    const provided = request.headers.get("x-app-passcode") || "";
+    if (!safeEqual(provided, env.APP_PASSCODE)) {
+      return json(
+        { error: "Wrong or missing access code.", code: "passcode" },
+        401,
+      );
+    }
+  }
+
   if (!env.ELEVENLABS_API_KEY) {
     return json(
       {

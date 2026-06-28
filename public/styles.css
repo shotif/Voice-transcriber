@@ -104,6 +104,21 @@ audio { width: 100%; margin-bottom: 12px; }
 .primary-btn:active { transform: scale(0.99); }
 .primary-btn:disabled { opacity: 0.55; cursor: progress; }
 
+.text-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #3a3c63;
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 13px 14px;
+  font-size: 1rem;
+  margin-bottom: 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.text-input:focus { border-color: var(--primary); }
+
 .link-btn {
   background: none;
   border: 0;

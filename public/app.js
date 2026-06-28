@@ -7,6 +7,7 @@
 
   const MAX_HISTORY = 10;
   const HISTORY_KEY = "glas:history:v1";
+  const PASS_KEY = "glas:passcode:v1";
   const ACCEPTED = /\.(opus|ogg|oga|m4a|mp3|wav|mp4|webm|aac|flac)$/i;
 
   const $ = (id) => document.getElementById(id);
@@ -29,6 +30,11 @@
     clearHistory: $("clearHistory"),
     toast: $("toast"),
     installHint: $("installHint"),
+    unlock: $("unlock"),
+    unlockForm: $("unlockForm"),
+    unlockMsg: $("unlockMsg"),
+    passcodeInput: $("passcodeInput"),
+    changeCode: $("changeCode"),
   };
 
   let currentFile = null;
@@ -120,12 +126,23 @@
       const form = new FormData();
       form.append("file", currentFile, currentFile.name || "voice-note.ogg");
 
-      const res = await fetch("/api/transcribe", { method: "POST", body: form });
+      const headers = {};
+      const pass = getPass();
+      if (pass) headers["x-app-passcode"] = pass;
+
+      const res = await fetch("/api/transcribe", { method: "POST", body: form, headers });
       let data;
       try {
         data = await res.json();
       } catch {
         throw new Error(`Server returned an unreadable response (HTTP ${res.status}).`);
+      }
+      // Wrong/missing access code → reopen the unlock gate instead of erroring.
+      if (res.status === 401 && data?.code === "passcode") {
+        hide(el.loading);
+        setPass("");
+        showUnlock("Pogrešan pristupni kôd. Pokušaj ponovno.");
+        return;
       }
       if (!res.ok) throw new Error(data?.error || `Transcription failed (HTTP ${res.status}).`);
 
@@ -260,6 +277,43 @@
     });
   }
 
+  // ---------- access code (shared passcode) ----------
+  function getPass() {
+    try {
+      return localStorage.getItem(PASS_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+  function setPass(v) {
+    try {
+      if (v) localStorage.setItem(PASS_KEY, v);
+      else localStorage.removeItem(PASS_KEY);
+    } catch {
+      /* storage disabled — non-fatal */
+    }
+  }
+  function showUnlock(msg) {
+    if (msg) el.unlockMsg.textContent = msg;
+    show(el.unlock);
+    el.passcodeInput.value = getPass();
+    el.passcodeInput.focus();
+  }
+  async function initPasscodeGate() {
+    let required = false;
+    try {
+      const res = await fetch("/api/transcribe", { method: "GET" });
+      const data = await res.json();
+      required = Boolean(data?.passcode_required);
+    } catch {
+      required = false; // offline or health failed — let transcribe handle 401
+    }
+    if (required) {
+      show(el.changeCode);
+      if (!getPass()) showUnlock("Unesi pristupni kôd da koristiš transkripciju.");
+    }
+  }
+
   // ---------- share target intake ----------
   async function loadSharedAudio() {
     const params = new URLSearchParams(location.search);
@@ -332,6 +386,18 @@
   el.clearFile.addEventListener("click", clearFile);
   el.transcribeBtn.addEventListener("click", transcribe);
   el.copyBtn.addEventListener("click", () => copyText(el.transcript.textContent, el.copyBtn));
+  el.unlockForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const code = el.passcodeInput.value.trim();
+    if (!code) return;
+    setPass(code);
+    hide(el.unlock);
+    toast("Pristupni kôd spremljen");
+  });
+  el.changeCode.addEventListener("click", () =>
+    showUnlock("Unesi novi pristupni kôd."),
+  );
+
   el.clearHistory.addEventListener("click", () => {
     if (confirm("Clear all saved transcripts?")) {
       writeHistory([]);
@@ -351,5 +417,6 @@
   }
 
   renderHistory();
+  initPasscodeGate();
   loadSharedAudio();
 })();
