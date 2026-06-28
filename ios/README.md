@@ -2,53 +2,47 @@
 
 iOS doesn't support Web Share Targets, so to get a one-tap "Share voice note →
 Croatian text" on iPhone we use an **Apple Shortcut**. It appears in the iOS
-share sheet, POSTs the shared audio to `/api/transcribe`, and copies the
-transcript to the clipboard.
+share sheet, POSTs the shared audio to `/api/transcribe` (as a raw body with the
+`x-app-passcode` header), and copies the transcript to the clipboard.
 
-This works against the same backend as the web app — it just sends the audio as
-the raw request body with the `x-app-passcode` header.
+## Important: how shortcuts can be installed on modern iOS
 
-## Files
+On **iOS 15 and later, Apple removed unsigned-shortcut import** (the old "Allow
+Untrusted Shortcuts" toggle is gone — newer iOS only has "Private Sharing", which
+is for receiving iCloud links from contacts). A shortcut can only be installed
+via an **iCloud link signed by Apple**, which is generated when someone **builds
+the shortcut on an Apple device** and shares it.
 
-- `Glas-prijepis.plist` — a ready-made shortcut. You must replace the passcode
-  placeholder `__ZAMIJENI_PRISTUPNI_KOD__` with your real `APP_PASSCODE`
-  (either edit the file before sending, or fix it on-device after import).
+So the `Glas-prijepis.plist` file here **will not import on iOS 15+**. It is kept
+only as a human-readable reference of the actions. The supported path is:
 
-## Importing the .plist on an iPhone
+> **One person with an iPhone builds the shortcut once (below), then shares its
+> iCloud link** with everyone else. Build once, share forever — no Mac needed.
 
-1. On the iPhone: **Settings → Shortcuts → enable "Allow Untrusted Shortcuts"**
-   (you may need to run any one shortcut first for the toggle to appear).
-2. Rename `Glas-prijepis.plist` to **`Glas-prijepis.shortcut`** and open it
-   (AirDrop / Files / email). Tap **Add Shortcut**.
-3. Open the shortcut, find the **Get Contents of URL** action, and in the
-   `x-app-passcode` header replace `__ZAMIJENI_PRISTUPNI_KOD__` with the real
-   access code.
-4. In the shortcut settings (ⓘ), confirm **Show in Share Sheet** is on.
+## Build it (≈2 minutes, on any iPhone)
 
-> Unsigned-shortcut import is finicky across iOS versions. If the file won't
-> import, just build it by hand in ~2 minutes using the steps below — that path
-> always works.
+In the **Shortcuts** app → **+**, name it **Glas prijepis**:
 
-## Building it by hand (reliable fallback)
-
-In the **Shortcuts** app → **+** → name it **Glas prijepis**:
-
-1. ⓘ → enable **Show in Share Sheet**; accept types **Media** + **Files**.
-   Set **If there's no input → Ask For → Files**.
-2. **Get Contents of URL**:
+1. **Add Action → "Get Contents of URL"**:
    - URL: `https://glas.shotif.workers.dev/api/transcribe`
    - Show More → Method **POST**
    - Header: `x-app-passcode` = your access code (optionally `x-user-label` = name)
    - Request Body: **File** → value = **Shortcut Input**
-3. **Get Dictionary Value** → value for **text**.
-4. **Copy to Clipboard**.
-5. **Quick Look** (to show the text).
+2. **Get Dictionary Value** → value for **text** in **Contents of URL**.
+3. **Copy to Clipboard**.
+4. **Quick Look** (to show the text).
+5. Tap **ⓘ** → enable **Show in Share Sheet** (accept Media + Files).
+6. **Done.**
 
-## Sharing with friends
+The Worker accepts the shared file as a raw request body, so no multipart "Form"
+field is needed — Request Body = File = Shortcut Input is enough.
 
-After it works, in Shortcuts long-press it → **Share → Copy iCloud Link** and
-send that link to other iPhone users (the link carries the configured passcode,
-so treat it like the passcode itself).
+## Share with friends
+
+In Shortcuts, long-press it → **Share → Copy iCloud Link** and send that link to
+other iPhone users. The link is signed by Apple, so it installs on any iPhone
+(recipients may toggle Settings → Shortcuts → **Private Sharing** on). The link
+carries the configured passcode, so treat it like the passcode itself.
 
 ## Using it
 
