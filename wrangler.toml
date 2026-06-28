@@ -1,0 +1,10 @@
+# Cloudflare Pages config.
+# The dashboard is the primary deploy path (see SETUP.md). This file lets the
+# optional `wrangler` CLI know the project name and where the static output is,
+# and pins a compatibility date for the Pages Functions runtime.
+name = "glas"
+compatibility_date = "2026-06-28"
+pages_build_output_dir = "public"
+
+# Secrets (ELEVENLABS_API_KEY) are NOT defined here — they are set as encrypted
+# secrets in the dashboard, or via `wrangler pages secret put ELEVENLABS_API_KEY`.

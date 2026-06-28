@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="hr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Glas — Croatian Voice Transcriber</title>
+    <meta name="description" content="Turn Croatian WhatsApp voice notes into clean, copyable text." />
+    <meta name="theme-color" content="#4f46e5" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Glas" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div class="logo" aria-hidden="true">
+          <img src="/icons/icon-192.png" alt="" width="40" height="40" />
+        </div>
+        <div>
+          <h1>Glas</h1>
+          <p class="tagline">Hrvatski glasovni prijepis · Croatian voice → text</p>
+        </div>
+      </header>
+
+      <!-- Upload / drop zone -->
+      <section
+        id="dropzone"
+        class="dropzone"
+        tabindex="0"
+        role="button"
+        aria-label="Upload or drop a voice note"
+      >
+        <input
+          id="fileInput"
+          type="file"
+          accept="audio/*,.opus,.ogg,.oga,.m4a,.mp3,.wav"
+          hidden
+        />
+        <div class="dropzone-inner">
+          <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Zm6 8a6 6 0 0 1-5 5.92V20h2a1 1 0 1 1 0 2H9a1 1 0 1 1 0-2h2v-3.08A6 6 0 0 1 6 11a1 1 0 1 1 2 0 4 4 0 0 0 8 0 1 1 0 1 1 2 0Z"
+            />
+          </svg>
+          <p class="dz-title">Tap to choose a voice note</p>
+          <p class="dz-sub">or drag &amp; drop · .opus .ogg .m4a .mp3 .wav</p>
+        </div>
+      </section>
+
+      <!-- Selected file preview -->
+      <section id="filePreview" class="card hidden" aria-live="polite">
+        <div class="file-row">
+          <span class="file-name" id="fileName">file.opus</span>
+          <button class="link-btn" id="clearFile" type="button">Remove</button>
+        </div>
+        <audio id="audioPlayer" controls preload="metadata"></audio>
+        <button id="transcribeBtn" class="primary-btn" type="button">
+          Transcribe Croatian
+        </button>
+      </section>
+
+      <!-- Loading -->
+      <section id="loading" class="card center hidden" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Transcribing… this can take a few seconds.</p>
+      </section>
+
+      <!-- Error -->
+      <section id="error" class="card error hidden" role="alert"></section>
+
+      <!-- Result -->
+      <section id="result" class="card hidden">
+        <div class="result-head">
+          <span class="badge" id="langBadge">hrvatski</span>
+          <button id="copyBtn" class="copy-btn" type="button">Copy</button>
+        </div>
+        <p id="transcript" class="transcript"></p>
+      </section>
+
+      <!-- History -->
+      <section id="historySection" class="history hidden">
+        <div class="history-head">
+          <h2>Recent</h2>
+          <button id="clearHistory" class="link-btn" type="button">Clear all</button>
+        </div>
+        <ul id="historyList" class="history-list"></ul>
+      </section>
+
+      <footer class="footer">
+        <span id="installHint" class="hidden">Add to Home screen to share voice notes straight from WhatsApp.</span>
+        <span class="footer-note">Audio is sent to ElevenLabs Scribe for transcription. Nothing is stored on a server.</span>
+      </footer>
+    </main>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
