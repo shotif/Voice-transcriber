@@ -128,20 +128,42 @@ async function handleTranscribe(
     );
   }
 
-  let inbound: FormData;
-  try {
-    inbound = await request.formData();
-  } catch {
-    return json(
-      { error: "Expected multipart/form-data with an audio 'file' field." },
-      400,
-    );
+  // Accept the audio two ways:
+  //  a) multipart/form-data with a `file` field  — used by the web app.
+  //  b) a raw audio request body                 — used by the iOS Shortcut,
+  //     which just POSTs the shared file's bytes (Content-Type = the audio type,
+  //     optional X-Filename header). This keeps the Shortcut dead simple.
+  const contentType = request.headers.get("content-type") || "";
+  let file: File;
+
+  if (contentType.includes("multipart/form-data")) {
+    let inbound: FormData;
+    try {
+      inbound = await request.formData();
+    } catch {
+      return json(
+        { error: "Expected multipart/form-data with an audio 'file' field." },
+        400,
+      );
+    }
+    const f = inbound.get("file") ?? inbound.get("audio");
+    if (!(f instanceof File)) {
+      return json({ error: "No audio file found in the request." }, 400);
+    }
+    file = f;
+  } else {
+    const buf = await request.arrayBuffer();
+    if (!buf || buf.byteLength === 0) {
+      return json({ error: "The request body was empty (no audio)." }, 400);
+    }
+    const name =
+      safeDecode(request.headers.get("x-filename")) ||
+      `voice-note${extForType(contentType)}`;
+    file = new File([buf], name, {
+      type: contentType || "application/octet-stream",
+    });
   }
 
-  const file = inbound.get("file") ?? inbound.get("audio");
-  if (!(file instanceof File)) {
-    return json({ error: "No audio file found in the request." }, 400);
-  }
   if (file.size === 0) {
     return json({ error: "The uploaded audio file is empty." }, 400);
   }
@@ -249,6 +271,19 @@ function safeDecode(v: string | null): string {
   } catch {
     return v;
   }
+}
+
+// Best-effort file extension from a content-type, so ElevenLabs can sniff the
+// container when the iOS Shortcut posts a raw body.
+function extForType(ct: string): string {
+  const t = ct.toLowerCase();
+  if (t.includes("ogg") || t.includes("opus")) return ".ogg";
+  if (t.includes("mpeg") || t.includes("mp3")) return ".mp3";
+  if (t.includes("mp4") || t.includes("m4a") || t.includes("aac")) return ".m4a";
+  if (t.includes("wav")) return ".wav";
+  if (t.includes("webm")) return ".webm";
+  if (t.includes("flac")) return ".flac";
+  return ".audio";
 }
 
 async function logTranscript(
