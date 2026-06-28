@@ -22,3 +22,13 @@ ELEVENLABS_BASE_URL = "https://api.eu.residency.elevenlabs.io"
 # The SECRET key is NOT here (never commit it). Set ELEVENLABS_API_KEY in the
 # dashboard (Settings > Variables and Secrets, type = Secret) or via:
 #   npx wrangler secret put ELEVENLABS_API_KEY
+
+# OPTIONAL — owner-only admin transcript log (see SETUP.md "Admin log").
+# 1) Create a D1 database (dashboard: Storage & Databases > D1 > Create, name it
+#    e.g. "glas-log"), or:  npx wrangler d1 create glas-log
+# 2) Paste its database_id below and UNCOMMENT this block.
+# 3) Set an ADMIN_PASSWORD secret. Then redeploy. Review at /admin.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "glas-log"
+# database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"

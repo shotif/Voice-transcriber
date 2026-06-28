@@ -8,6 +8,7 @@
   const MAX_HISTORY = 10;
   const HISTORY_KEY = "glas:history:v1";
   const PASS_KEY = "glas:passcode:v1";
+  const NAME_KEY = "glas:username:v1";
   const ACCEPTED = /\.(opus|ogg|oga|m4a|mp3|wav|mp4|webm|aac|flac)$/i;
 
   const $ = (id) => document.getElementById(id);
@@ -34,6 +35,7 @@
     unlockForm: $("unlockForm"),
     unlockMsg: $("unlockMsg"),
     passcodeInput: $("passcodeInput"),
+    nameInput: $("nameInput"),
     changeCode: $("changeCode"),
   };
 
@@ -129,6 +131,8 @@
       const headers = {};
       const pass = getPass();
       if (pass) headers["x-app-passcode"] = pass;
+      const name = getName();
+      if (name) headers["x-user-label"] = encodeURIComponent(name);
 
       const res = await fetch("/api/transcribe", { method: "POST", body: form, headers });
       let data;
@@ -293,10 +297,26 @@
       /* storage disabled — non-fatal */
     }
   }
+  function getName() {
+    try {
+      return localStorage.getItem(NAME_KEY) || "";
+    } catch {
+      return "";
+    }
+  }
+  function setName(v) {
+    try {
+      if (v) localStorage.setItem(NAME_KEY, v);
+      else localStorage.removeItem(NAME_KEY);
+    } catch {
+      /* non-fatal */
+    }
+  }
   function showUnlock(msg) {
     if (msg) el.unlockMsg.textContent = msg;
     show(el.unlock);
     el.passcodeInput.value = getPass();
+    el.nameInput.value = getName();
     el.passcodeInput.focus();
   }
   async function initPasscodeGate() {
@@ -391,6 +411,7 @@
     const code = el.passcodeInput.value.trim();
     if (!code) return;
     setPass(code);
+    setName(el.nameInput.value.trim());
     hide(el.unlock);
     toast("Pristupni kôd spremljen");
   });

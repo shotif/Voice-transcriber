@@ -3,7 +3,7 @@
  * 2. Web Share Target: receives a POSTed audio file from Android's share sheet,
  *    stashes it in the Cache, and redirects into the transcribe flow.
  */
-const VERSION = "glas-v1";
+const VERSION = "glas-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = "glas-share"; // holds the most recently shared audio
 const SHARED_AUDIO_URL = "/__shared-audio"; // internal cache key, never fetched from network
@@ -49,26 +49,26 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Never cache the API; always hit the network.
-  if (url.pathname.startsWith("/api/")) return;
+  // Never cache the API or the admin page; always hit the network.
+  if (url.pathname.startsWith("/api/") || url.pathname === "/admin") return;
 
-  // App shell: cache-first for same-origin GETs, falling back to network.
+  // App shell: NETWORK-FIRST for same-origin GETs so deploys always show the
+  // latest frontend; fall back to cache (then index.html) only when offline.
   if (request.method === "GET" && url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(request).then(
-        (cached) =>
-          cached ||
-          fetch(request)
-            .then((res) => {
-              // Cache successful navigations/assets opportunistically.
-              if (res.ok && (request.mode === "navigate" || SHELL_ASSETS.includes(url.pathname))) {
-                const copy = res.clone();
-                caches.open(SHELL_CACHE).then((c) => c.put(request, copy));
-              }
-              return res;
-            })
-            .catch(() => caches.match("/index.html")),
-      ),
+      fetch(request)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(SHELL_CACHE).then((c) => c.put(request, copy));
+          }
+          return res;
+        })
+        .catch(() =>
+          caches
+            .match(request)
+            .then((cached) => cached || caches.match("/index.html")),
+        ),
     );
   }
 });
