@@ -89,6 +89,8 @@ function handleHealth(env: Env): Response {
   return json({
     ok: true,
     route: "/api/transcribe",
+    api_version: "raw-body+format-text+admin", // canary: confirms latest deploy
+    accepts: "multipart 'file' field OR raw audio body; ?format=text for plain text",
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
     language_code: env.ELEVENLABS_LANGUAGE_CODE || DEFAULT_LANGUAGE_CODE,
