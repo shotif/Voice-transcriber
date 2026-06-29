@@ -303,7 +303,12 @@ async function transcribeToJSON(
   if (env.DB && text) {
     const label =
       safeDecode(request.headers.get("x-user-label")).slice(0, 60) || "—";
-    ctx.waitUntil(logTranscript(env, { label, filename, lang, text }));
+    const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
+    const secRaw = parseFloat(request.headers.get("x-audio-seconds") || "");
+    const seconds = Number.isFinite(secRaw) && secRaw > 0 ? secRaw : null;
+    ctx.waitUntil(
+      logTranscript(env, { label, filename, lang, text, deviceId, seconds }),
+    );
   }
 
   return json({
@@ -417,6 +422,19 @@ async function handleSummarize(request: Request, env: Env): Promise<Response> {
 const SCHEMA =
   "CREATE TABLE IF NOT EXISTS transcripts (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, user_label TEXT, filename TEXT, lang TEXT, chars INTEGER, text TEXT)";
 
+// Create the table and add later columns. ALTER on an existing column throws
+// ("duplicate column name") — ignored, so this is a safe idempotent migration.
+async function ensureSchema(db: D1Database): Promise<void> {
+  await db.prepare(SCHEMA).run();
+  for (const col of ["device_id TEXT", "seconds REAL"]) {
+    try {
+      await db.prepare(`ALTER TABLE transcripts ADD COLUMN ${col}`).run();
+    } catch {
+      /* column already exists */
+    }
+  }
+}
+
 function safeDecode(v: string | null): string {
   if (!v) return "";
   try {
@@ -441,15 +459,31 @@ function extForType(ct: string): string {
 
 async function logTranscript(
   env: Env,
-  e: { label: string; filename: string; lang: string; text: string },
+  e: {
+    label: string;
+    filename: string;
+    lang: string;
+    text: string;
+    deviceId: string;
+    seconds: number | null;
+  },
 ): Promise<void> {
   try {
-    await env.DB!.prepare(SCHEMA).run();
+    await ensureSchema(env.DB!);
     await env
       .DB!.prepare(
-        "INSERT INTO transcripts (created_at, user_label, filename, lang, chars, text) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO transcripts (created_at, user_label, filename, lang, chars, text, device_id, seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .bind(Date.now(), e.label, e.filename, e.lang, e.text.length, e.text)
+      .bind(
+        Date.now(),
+        e.label,
+        e.filename,
+        e.lang,
+        e.text.length,
+        e.text,
+        e.deviceId || null,
+        e.seconds,
+      )
       .run();
   } catch {
     /* logging must never break transcription */
@@ -478,10 +512,10 @@ async function handleAdminList(request: Request, env: Env): Promise<Response> {
   const gate = adminGate(request, env);
   if (gate) return gate;
   try {
-    await env.DB!.prepare(SCHEMA).run();
+    await ensureSchema(env.DB!);
     const { results } = await env
       .DB!.prepare(
-        "SELECT id, created_at, user_label, filename, lang, chars, text FROM transcripts ORDER BY id DESC LIMIT 500",
+        "SELECT id, created_at, user_label, filename, lang, chars, text, device_id, seconds FROM transcripts ORDER BY id DESC LIMIT 500",
       )
       .all();
     return json({ transcripts: results ?? [] });
@@ -556,6 +590,7 @@ const ADMIN_HTML = `<!doctype html>
     </div>
     <p id="count" class="count"></p>
     <p id="panelErr" class="err hidden"></p>
+    <div id="usage" class="card"></div>
     <div id="list"></div>
   </div>
 </div>
@@ -571,14 +606,47 @@ const ADMIN_HTML = `<!doctype html>
     $("login").classList.toggle("hidden",authed);
     $("panel").classList.toggle("hidden",!authed);
   }
+  function whoKey(r){
+    var label=(r.user_label||"").trim();
+    if(label && label!=="—") return label;
+    if(r.device_id) return "uređaj " + String(r.device_id).slice(0,8);
+    return "nepoznato";
+  }
+  function renderUsage(rows){
+    var box=$("usage");box.innerHTML="";
+    var by={};
+    rows.forEach(function(r){
+      var k=whoKey(r);
+      if(!by[k]) by[k]={count:0,chars:0,seconds:0,last:0};
+      by[k].count++; by[k].chars+=(r.chars||0); by[k].seconds+=(r.seconds||0);
+      if(r.created_at>by[k].last) by[k].last=r.created_at;
+    });
+    var keys=Object.keys(by).sort(function(a,b){return by[b].count-by[a].count});
+    var title=document.createElement("div");title.className="who";title.style.marginBottom="8px";
+    title.textContent="Potrošnja po korisniku/uređaju";box.appendChild(title);
+    if(!keys.length){var none=document.createElement("p");none.className="muted";none.textContent="Nema podataka.";box.appendChild(none);return}
+    keys.forEach(function(k){
+      var u=by[k];
+      var line=document.createElement("div");line.className="meta";line.style.marginBottom="6px";
+      var l=document.createElement("span");var who=document.createElement("span");who.className="who";who.textContent=k;
+      l.appendChild(who);
+      var det=document.createElement("span");det.className="muted";
+      var mins=u.seconds?("  ·  "+(u.seconds/60).toFixed(1)+" min"):"";
+      det.textContent="  ·  "+u.count+" prijepisa  ·  "+u.chars+" znakova"+mins;
+      l.appendChild(det);
+      var t=document.createElement("span");t.textContent=fmt(u.last);
+      line.appendChild(l);line.appendChild(t);box.appendChild(line);
+    });
+  }
   function render(){
     var q=$("filter").value.trim().toLowerCase();
     var list=$("list");list.innerHTML="";
     var rows=all.filter(function(r){
       if(!q)return true;
-      return ((r.text||"")+" "+(r.user_label||"")+" "+(r.filename||"")).toLowerCase().indexOf(q)>=0;
+      return ((r.text||"")+" "+(r.user_label||"")+" "+(r.filename||"")+" "+(r.device_id||"")).toLowerCase().indexOf(q)>=0;
     });
     $("count").textContent=rows.length+" of "+all.length+" transcripts";
+    renderUsage(rows);
     rows.forEach(function(r){
       var item=document.createElement("div");item.className="item";
       var meta=document.createElement("div");meta.className="meta";
@@ -586,7 +654,9 @@ const ADMIN_HTML = `<!doctype html>
       var who=document.createElement("span");who.className="who";who.textContent=r.user_label||"—";
       left.appendChild(who);
       var fn=document.createElement("span");fn.className="muted";
-      fn.textContent="  ·  "+(r.filename||"")+"  ·  "+(r.lang||"")+"  ·  "+(r.chars||0)+" chars";
+      var dev=r.device_id?("  ·  #"+String(r.device_id).slice(0,8)):"";
+      var dur=r.seconds?("  ·  "+Math.round(r.seconds)+"s"):"";
+      fn.textContent="  ·  "+(r.filename||"")+"  ·  "+(r.lang||"")+"  ·  "+(r.chars||0)+" znakova"+dur+dev;
       left.appendChild(fn);
       var time=document.createElement("span");time.textContent=fmt(r.created_at);
       meta.appendChild(left);meta.appendChild(time);

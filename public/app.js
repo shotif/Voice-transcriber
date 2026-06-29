@@ -9,6 +9,7 @@
   const HISTORY_KEY = "glas:history:v1";
   const PASS_KEY = "glas:passcode:v1";
   const NAME_KEY = "glas:username:v1";
+  const DEVICE_KEY = "glas:deviceid:v1";
   const ACCEPTED = /\.(opus|ogg|oga|m4a|mp3|wav|mp4|webm|aac|flac)$/i;
 
   const $ = (id) => document.getElementById(id);
@@ -67,6 +68,23 @@
     show(el.toast);
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => hide(el.toast), 2200);
+  }
+
+  // Stable, anonymous per-device id (random; not tied to any account) so the
+  // admin usage view can group transcripts by device.
+  function getDeviceId() {
+    try {
+      let id = localStorage.getItem(DEVICE_KEY);
+      if (!id) {
+        id =
+          (crypto?.randomUUID && crypto.randomUUID()) ||
+          "d-" + Date.now().toString(36) + Math.random().toString(36).slice(2);
+        localStorage.setItem(DEVICE_KEY, id);
+      }
+      return id;
+    } catch {
+      return "";
+    }
   }
 
   function humanSize(bytes) {
@@ -214,6 +232,10 @@
       if (pass) headers["x-app-passcode"] = pass;
       const name = getName();
       if (name) headers["x-user-label"] = encodeURIComponent(name);
+      const deviceId = getDeviceId();
+      if (deviceId) headers["x-device-id"] = deviceId;
+      const dur = el.audioPlayer.duration;
+      if (Number.isFinite(dur) && dur > 0) headers["x-audio-seconds"] = String(Math.round(dur));
 
       const res = await fetch("/api/transcribe", { method: "POST", body: form, headers, signal: ac.signal });
       let data;
