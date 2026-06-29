@@ -35,6 +35,8 @@ interface Env {
   // turns a transcript into a short Croatian summary via the Claude API.
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string; // override the summary model (default below)
+  // Max successful transcriptions per device per 24h (default 50). Needs DB.
+  RATE_LIMIT_PER_DAY?: string;
   // Optional overrides (set in the dashboard under Settings > Variables):
   ELEVENLABS_MODEL_ID?: string;
   ELEVENLABS_LANGUAGE_CODE?: string;
@@ -55,6 +57,7 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_SUMMARY_MODEL = "claude-sonnet-4-6";
 const MAX_SUMMARY_CHARS = 100_000; // guardrail on transcript size sent to Claude
+const DEFAULT_RATE_LIMIT = 50; // successful transcriptions / device / 24h
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -112,6 +115,7 @@ function handleHealth(env: Env): Response {
     passcode_required: Boolean(env.APP_PASSCODE),
     summarize_enabled: Boolean(env.ANTHROPIC_API_KEY),
     summary_model: env.ANTHROPIC_MODEL || DEFAULT_SUMMARY_MODEL,
+    rate_limit_per_day: env.DB ? rateLimitPerDay(env) : null,
     db_bound: Boolean(env.DB),
     admin_password_set: Boolean(env.ADMIN_PASSWORD),
     admin_enabled: Boolean(env.DB && env.ADMIN_PASSWORD),
@@ -170,6 +174,18 @@ async function transcribeToJSON(
           "Server is missing ELEVENLABS_API_KEY. Add it under the project's Settings > Variables and Secrets, then redeploy.",
       },
       500,
+    );
+  }
+
+  // Per-device daily rate limit (protects the ElevenLabs + Claude keys from
+  // abuse). Counts this caller's successful transcriptions in the last 24h.
+  if (await overRateLimit(request, env)) {
+    return json(
+      {
+        error: `Dnevni limit prijepisa je dosegnut (${rateLimitPerDay(env)}/24h). Pokušaj ponovno kasnije.`,
+        code: "rate_limit",
+      },
+      429,
     );
   }
 
@@ -487,6 +503,43 @@ async function logTranscript(
       .run();
   } catch {
     /* logging must never break transcription */
+  }
+}
+
+function rateLimitPerDay(env: Env): number {
+  const n = parseInt(env.RATE_LIMIT_PER_DAY || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RATE_LIMIT;
+}
+
+// Returns true if this caller has hit the daily transcription cap. Counts are
+// read from the D1 log; without DB there is no store, so no limit is enforced.
+async function overRateLimit(request: Request, env: Env): Promise<boolean> {
+  if (!env.DB) return false;
+  const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
+  const label = safeDecode(request.headers.get("x-user-label")).slice(0, 60);
+  // Identify by device id (web) or, failing that, the device name (iOS Shortcut).
+  let column: "device_id" | "user_label";
+  let value: string;
+  if (deviceId) {
+    column = "device_id";
+    value = deviceId;
+  } else if (label && label !== "—") {
+    column = "user_label";
+    value = label;
+  } else {
+    return false; // can't identify the caller — passcode still gates access
+  }
+  try {
+    await ensureSchema(env.DB);
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM transcripts WHERE ${column} = ? AND created_at > ?`,
+    )
+      .bind(value, since)
+      .first<{ n: number }>();
+    return (row?.n ?? 0) >= rateLimitPerDay(env);
+  } catch {
+    return false; // never block on a logging/DB hiccup
   }
 }
 
