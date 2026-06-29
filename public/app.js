@@ -26,6 +26,11 @@
     transcript: $("transcript"),
     langBadge: $("langBadge"),
     copyBtn: $("copyBtn"),
+    summarizeBtn: $("summarizeBtn"),
+    summaryWrap: $("summaryWrap"),
+    summary: $("summary"),
+    copySummaryBtn: $("copySummaryBtn"),
+    summaryLoading: $("summaryLoading"),
     historySection: $("historySection"),
     historyList: $("historyList"),
     clearHistory: $("clearHistory"),
@@ -41,6 +46,8 @@
 
   let currentFile = null;
   let currentObjectUrl = null;
+  let summarizeEnabled = false; // learned from the health route
+  let currentTranscript = ""; // text backing the visible result card
 
   // ---------- helpers ----------
   const show = (node) => node.classList.remove("hidden");
@@ -175,13 +182,70 @@
     }
   }
 
-  function renderResult(text, lang) {
+  function renderResult(text, lang, summary) {
+    currentTranscript = text;
     el.transcript.textContent = text;
     el.langBadge.textContent = lang === "hr" ? "hrvatski" : lang;
     el.copyBtn.classList.remove("copied");
     el.copyBtn.textContent = "Copy";
+    // Reset summary UI for this result.
+    hide(el.summaryLoading);
+    if (summary) {
+      el.summary.textContent = summary;
+      show(el.summaryWrap);
+      hide(el.summarizeBtn);
+    } else {
+      hide(el.summaryWrap);
+      el.summary.textContent = "";
+      if (summarizeEnabled) {
+        el.summarizeBtn.classList.remove("hidden");
+        el.summarizeBtn.disabled = false;
+        el.summarizeBtn.textContent = "Sažmi";
+      }
+    }
     show(el.result);
     el.result.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function summarizeCurrent() {
+    const text = currentTranscript.trim();
+    if (!text) return;
+    hide(el.summaryWrap);
+    show(el.summaryLoading);
+    el.summarizeBtn.disabled = true;
+    try {
+      const headers = { "content-type": "application/json" };
+      const pass = getPass();
+      if (pass) headers["x-app-passcode"] = pass;
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ text }),
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(`Server returned an unreadable response (HTTP ${res.status}).`);
+      }
+      if (res.status === 401) {
+        setPass("");
+        showUnlock("Pogrešan pristupni kôd. Pokušaj ponovno.");
+        return;
+      }
+      if (!res.ok) throw new Error(data?.error || `Sažimanje nije uspjelo (HTTP ${res.status}).`);
+      const summary = (data.summary || "").trim();
+      if (!summary) throw new Error("Sažetak je stigao prazan.");
+      el.summary.textContent = summary;
+      show(el.summaryWrap);
+      hide(el.summarizeBtn);
+      updateHistorySummary(text, summary);
+    } catch (err) {
+      el.summarizeBtn.disabled = false;
+      toast(err.message || "Sažimanje nije uspjelo.");
+    } finally {
+      hide(el.summaryLoading);
+    }
   }
 
   async function copyText(text, btn) {
@@ -235,6 +299,16 @@
     writeHistory(arr);
     renderHistory();
   }
+  // Attach a generated summary to the most recent matching history entry.
+  function updateHistorySummary(text, summary) {
+    const arr = readHistory();
+    const item = arr.find((e) => e.text === text);
+    if (item) {
+      item.summary = summary;
+      writeHistory(arr);
+      renderHistory();
+    }
+  }
   function relativeTime(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
     if (s < 60) return "just now";
@@ -274,7 +348,7 @@
 
       li.append(top, p);
       li.addEventListener("click", () => {
-        renderResult(item.text, item.lang || "hr");
+        renderResult(item.text, item.lang || "hr", item.summary);
         copyText(item.text, el.copyBtn);
       });
       el.historyList.appendChild(li);
@@ -325,12 +399,17 @@
       const res = await fetch("/api/transcribe", { method: "GET" });
       const data = await res.json();
       required = Boolean(data?.passcode_required);
+      summarizeEnabled = Boolean(data?.summarize_enabled);
     } catch {
       required = false; // offline or health failed — let transcribe handle 401
     }
     if (required) {
       show(el.changeCode);
       if (!getPass()) showUnlock("Unesi pristupni kôd da koristiš transkripciju.");
+    }
+    // If a result is already on screen (e.g. from history), reveal the button now.
+    if (summarizeEnabled && !el.result.classList.contains("hidden") && el.summaryWrap.classList.contains("hidden")) {
+      el.summarizeBtn.classList.remove("hidden");
     }
   }
 
@@ -406,6 +485,8 @@
   el.clearFile.addEventListener("click", clearFile);
   el.transcribeBtn.addEventListener("click", transcribe);
   el.copyBtn.addEventListener("click", () => copyText(el.transcript.textContent, el.copyBtn));
+  el.summarizeBtn.addEventListener("click", summarizeCurrent);
+  el.copySummaryBtn.addEventListener("click", () => copyText(el.summary.textContent, el.copySummaryBtn));
   el.unlockForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const code = el.passcodeInput.value.trim();

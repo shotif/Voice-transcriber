@@ -31,6 +31,10 @@ interface Env {
   // owner can review them at /admin. Absent → no logging, /admin returns 503.
   DB?: D1Database;
   ADMIN_PASSWORD?: string;
+  // Optional AI summary. When ANTHROPIC_API_KEY is set, POST /api/summarize
+  // turns a transcript into a short Croatian summary via the Claude API.
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_MODEL?: string; // override the summary model (default below)
   // Optional overrides (set in the dashboard under Settings > Variables):
   ELEVENLABS_MODEL_ID?: string;
   ELEVENLABS_LANGUAGE_CODE?: string;
@@ -45,6 +49,12 @@ const DEFAULT_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_MODEL_ID = "scribe_v2";
 const DEFAULT_LANGUAGE_CODE = "hr"; // Croatian
 const MAX_BYTES = 100 * 1024 * 1024; // 100 MB guardrail; voice notes are tiny
+
+// Claude API for summaries (single message call; verified June 2026).
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+const DEFAULT_SUMMARY_MODEL = "claude-sonnet-4-6";
+const MAX_SUMMARY_CHARS = 100_000; // guardrail on transcript size sent to Claude
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -69,6 +79,9 @@ export default {
       if (request.method === "GET") return handleHealth(env);
       return json({ error: "Method not allowed." }, 405);
     }
+
+    if (url.pathname === "/api/summarize" && request.method === "POST")
+      return handleSummarize(request, env);
 
     // Admin log (owner-only; requires D1 binding DB + ADMIN_PASSWORD secret).
     if (url.pathname === "/api/admin/list" && request.method === "GET")
@@ -97,6 +110,8 @@ function handleHealth(env: Env): Response {
     base_url: (env.ELEVENLABS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     key_configured: Boolean(env.ELEVENLABS_API_KEY),
     passcode_required: Boolean(env.APP_PASSCODE),
+    summarize_enabled: Boolean(env.ANTHROPIC_API_KEY),
+    summary_model: env.ANTHROPIC_MODEL || DEFAULT_SUMMARY_MODEL,
     db_bound: Boolean(env.DB),
     admin_password_set: Boolean(env.ADMIN_PASSWORD),
     admin_enabled: Boolean(env.DB && env.ADMIN_PASSWORD),
@@ -297,6 +312,105 @@ async function transcribeToJSON(
     language_probability: result?.language_probability ?? null,
     model_id: modelId,
   });
+}
+
+// ---------- AI summary (Claude API) ----------
+const SUMMARY_SYSTEM =
+  "Ti si pomoćnik koji sažima glasovne poruke na hrvatskom. Korisnik ti daje " +
+  "prijepis (transkript) glasovne poruke. Odgovori ISKLJUČIVO na hrvatskom, " +
+  "jezgrovito i bez uvoda. Format:\n" +
+  "1) Jedna rečenica sažetka.\n" +
+  "2) Ključne točke kao kratki bulleti (•).\n" +
+  "3) Ako postoje, odvojeno navedi 'Zadaci/akcije:' kao bullete; ako ih nema, izostavi taj dio.\n" +
+  "Ne izmišljaj sadržaj koji nije u prijepisu.";
+
+async function handleSummarize(request: Request, env: Env): Promise<Response> {
+  const wantsText =
+    new URL(request.url).searchParams.get("format") === "text" ||
+    (request.headers.get("accept") || "").includes("text/plain");
+  const out = (summary: string, errorStatus?: number, errorMsg?: string) => {
+    if (wantsText) {
+      return new Response(errorMsg ?? summary, {
+        status: errorStatus ?? 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+    return errorMsg
+      ? json({ error: errorMsg }, errorStatus ?? 500)
+      : json({ summary });
+  };
+
+  // Same shared access gate as transcription.
+  if (env.APP_PASSCODE) {
+    const provided = request.headers.get("x-app-passcode") || "";
+    if (!safeEqual(provided, env.APP_PASSCODE)) {
+      return out("", 401, "Wrong or missing access code.");
+    }
+  }
+  if (!env.ANTHROPIC_API_KEY) {
+    return out("", 503, "Summaries are not configured (set ANTHROPIC_API_KEY).");
+  }
+
+  let text = "";
+  try {
+    const body: any = await request.json();
+    text = typeof body?.text === "string" ? body.text : "";
+  } catch {
+    return out("", 400, "Expected JSON body { text }.");
+  }
+  text = text.trim();
+  if (!text) return out("", 400, "No transcript text to summarize.");
+  if (text.length > MAX_SUMMARY_CHARS) text = text.slice(0, MAX_SUMMARY_CHARS);
+
+  const model = env.ANTHROPIC_MODEL || DEFAULT_SUMMARY_MODEL;
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        system: SUMMARY_SYSTEM,
+        messages: [{ role: "user", content: text }],
+      }),
+    });
+  } catch {
+    return out("", 502, "Could not reach the summary service. Try again.");
+  }
+
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const e: any = await res.json();
+      detail = e?.error?.message || "";
+    } catch {
+      /* ignore */
+    }
+    const hint = res.status === 401 ? "The ANTHROPIC_API_KEY appears invalid." : "";
+    return out("", res.status === 401 ? 502 : res.status, `Summary failed (HTTP ${res.status}). ${hint} ${detail}`.trim());
+  }
+
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    return out("", 502, "Summary service returned an unexpected response.");
+  }
+  // Claude returns content as an array of blocks; collect the text blocks.
+  const summary: string = Array.isArray(data?.content)
+    ? data.content
+        .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+        .map((b: any) => b.text)
+        .join("\n")
+        .trim()
+    : "";
+  if (!summary) return out("", 502, "The summary came back empty.");
+  return out(summary);
 }
 
 // ---------- admin log (D1) ----------

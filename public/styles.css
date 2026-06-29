@@ -144,7 +144,12 @@ audio { width: 100%; margin-bottom: 12px; }
 .copy-btn.copied { background: rgba(34, 197, 94, 0.16); border-color: var(--ok); color: #bbf7d0; }
 
 /* Result */
-.result-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.result-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 8px; }
+.result-actions { display: flex; gap: 8px; }
+.badge-ai { color: #c7f9d8; background: rgba(34, 197, 94, 0.16); border-color: rgba(34, 197, 94, 0.4); }
+.summary-wrap { margin-top: 16px; padding-top: 14px; border-top: 1px solid #2b2d4d; }
+.summary-loading { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--muted); font-size: 0.9rem; }
+.summary-loading .spinner { width: 20px; height: 20px; border-width: 2px; }
 .badge {
   font-size: 0.72rem;
   text-transform: uppercase;

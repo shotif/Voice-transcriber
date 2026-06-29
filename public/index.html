@@ -108,9 +108,25 @@
       <section id="result" class="card hidden">
         <div class="result-head">
           <span class="badge" id="langBadge">hrvatski</span>
-          <button id="copyBtn" class="copy-btn" type="button">Copy</button>
+          <div class="result-actions">
+            <button id="summarizeBtn" class="copy-btn hidden" type="button">Sažmi</button>
+            <button id="copyBtn" class="copy-btn" type="button">Copy</button>
+          </div>
         </div>
         <p id="transcript" class="transcript"></p>
+
+        <!-- AI summary sub-card -->
+        <div id="summaryWrap" class="summary-wrap hidden">
+          <div class="result-head">
+            <span class="badge badge-ai">AI sažetak</span>
+            <button id="copySummaryBtn" class="copy-btn" type="button">Copy</button>
+          </div>
+          <p id="summary" class="transcript"></p>
+        </div>
+        <div id="summaryLoading" class="summary-loading hidden">
+          <div class="spinner" aria-hidden="true"></div>
+          <span>Sažimam…</span>
+        </div>
       </section>
 
       <!-- History -->
