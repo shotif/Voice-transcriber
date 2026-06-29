@@ -29,7 +29,10 @@ Shortcut needs no JSON parsing — just fetch, copy, show. In the **Shortcuts** 
    - URL: `https://glas.shotif.workers.dev/api/transcribe?format=text`
    - Show More → Method **POST**
    - Header — set **Key** = `x-app-passcode`, **Value** = your access code
-     (optionally a second header `x-user-label` = your name)
+   - *(optional, for the admin usage view)* add a **“Get Device Details → Device
+     Name”** action above, then a second header **Key** = `x-user-label`,
+     **Value** = that Device Name (e.g. “Ivan's iPhone”) so the owner can see who
+     transcribed
    - Request Body: **File** → value = **Shortcut Input**
 2. **Copy to Clipboard** (copies the URL contents).
 3. **Quick Look** (to show the text).
