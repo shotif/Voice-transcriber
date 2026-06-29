@@ -83,6 +83,12 @@
         </div>
       </section>
 
+      <!-- In-app recording -->
+      <button id="recordBtn" class="record-btn" type="button">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span id="recordLabel">Snimi glas</span>
+      </button>
+
       <!-- Selected file preview -->
       <section id="filePreview" class="card hidden" aria-live="polite">
         <div class="file-row">
@@ -99,6 +105,7 @@
       <section id="loading" class="card center hidden" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
         <p>Transcribing… this can take a few seconds.</p>
+        <button id="cancelBtn" class="link-btn" type="button">Otkaži</button>
       </section>
 
       <!-- Error -->

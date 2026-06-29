@@ -21,6 +21,9 @@
     transcribeBtn: $("transcribeBtn"),
     clearFile: $("clearFile"),
     loading: $("loading"),
+    cancelBtn: $("cancelBtn"),
+    recordBtn: $("recordBtn"),
+    recordLabel: $("recordLabel"),
     error: $("error"),
     result: $("result"),
     transcript: $("transcript"),
@@ -48,6 +51,11 @@
   let currentObjectUrl = null;
   let summarizeEnabled = false; // learned from the health route
   let currentTranscript = ""; // text backing the visible result card
+  let currentAbort = null; // AbortController for the in-flight transcription
+  let mediaRecorder = null; // MediaRecorder while recording
+  let recChunks = [];
+  let recTimer = null;
+  let recSeconds = 0;
 
   // ---------- helpers ----------
   const show = (node) => node.classList.remove("hidden");
@@ -87,7 +95,7 @@
     return ACCEPTED.test(file.name || "");
   }
 
-  function setFile(file, displayName) {
+  function setFile(file, displayName, autoStart = true) {
     if (!file) return;
     if (!looksLikeAudio(file)) {
       showError(
@@ -107,6 +115,10 @@
     hide(el.result);
     show(el.filePreview);
     el.filePreview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    // Auto-transcribe as soon as a file lands (upload, drop, share, record).
+    // The loading card has an "Otkaži" button to cancel.
+    if (autoStart) transcribe();
   }
 
   function clearFile() {
@@ -123,9 +135,71 @@
     hide(el.error);
   }
 
+  // ---------- in-app voice recording ----------
+  function toggleRecord() {
+    if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
+    else startRecording();
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      showError("Snimanje nije podržano u ovom pregledniku.");
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showError("Pristup mikrofonu je odbijen. Dozvoli mikrofon i pokušaj ponovno.");
+      return;
+    }
+    recChunks = [];
+    let mime = "";
+    for (const c of ["audio/webm", "audio/mp4", "audio/ogg"]) {
+      if (window.MediaRecorder?.isTypeSupported?.(c)) {
+        mime = c;
+        break;
+      }
+    }
+    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size) recChunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      clearInterval(recTimer);
+      el.recordBtn.classList.remove("recording");
+      el.recordLabel.textContent = "Snimi glas";
+      const type = mediaRecorder?.mimeType || mime || "audio/webm";
+      const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+      const blob = new Blob(recChunks, { type });
+      mediaRecorder = null;
+      if (!blob.size) return;
+      const f = new File([blob], `snimka-${Date.now()}.${ext}`, { type });
+      setFile(f, `Snimka glasa.${ext}`);
+    };
+    mediaRecorder.start();
+    recSeconds = 0;
+    el.recordBtn.classList.add("recording");
+    el.recordLabel.textContent = "Zaustavi (0:00)";
+    recTimer = setInterval(() => {
+      recSeconds++;
+      const m = Math.floor(recSeconds / 60);
+      const s = recSeconds % 60;
+      el.recordLabel.textContent = `Zaustavi (${m}:${String(s).padStart(2, "0")})`;
+    }, 1000);
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  }
+
   // ---------- transcription ----------
   async function transcribe() {
     if (!currentFile) return;
+    if (currentAbort) currentAbort.abort(); // supersede any in-flight request
+    const ac = new AbortController();
+    currentAbort = ac;
     hide(el.error);
     hide(el.result);
     show(el.loading);
@@ -141,7 +215,7 @@
       const name = getName();
       if (name) headers["x-user-label"] = encodeURIComponent(name);
 
-      const res = await fetch("/api/transcribe", { method: "POST", body: form, headers });
+      const res = await fetch("/api/transcribe", { method: "POST", body: form, headers, signal: ac.signal });
       let data;
       try {
         data = await res.json();
@@ -171,6 +245,10 @@
         at: Date.now(),
       });
     } catch (err) {
+      if (err && err.name === "AbortError") {
+        hide(el.loading); // user cancelled — no error toast
+        return;
+      }
       const offline = !navigator.onLine;
       showError(
         offline
@@ -179,6 +257,7 @@
       );
     } finally {
       el.transcribeBtn.disabled = false;
+      if (currentAbort === ac) currentAbort = null;
     }
   }
 
@@ -448,7 +527,7 @@
       const blob = file.file instanceof Blob ? file.file : new Blob([file.file]);
       const f = new File([blob], name, { type: blob.type || "audio/ogg" });
       setFile(f, name);
-      toast("Voice note received — tap Transcribe");
+      toast("Glasovna poruka primljena — prepisujem…");
     }
   }
 
@@ -485,6 +564,10 @@
   el.clearFile.addEventListener("click", clearFile);
   el.transcribeBtn.addEventListener("click", transcribe);
   el.copyBtn.addEventListener("click", () => copyText(el.transcript.textContent, el.copyBtn));
+  el.recordBtn.addEventListener("click", toggleRecord);
+  el.cancelBtn.addEventListener("click", () => {
+    if (currentAbort) currentAbort.abort();
+  });
   el.summarizeBtn.addEventListener("click", summarizeCurrent);
   el.copySummaryBtn.addEventListener("click", () => copyText(el.summary.textContent, el.copySummaryBtn));
   el.unlockForm.addEventListener("submit", (e) => {
