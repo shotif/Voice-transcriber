@@ -301,6 +301,13 @@ audio { width: 100%; margin-bottom: 12px; }
 .hi-act:hover { color: var(--text); border-color: var(--primary); }
 .hi-act.danger:hover { color: #fecaca; border-color: var(--danger); }
 
+/* Clickable timestamped transcript */
+.result-audio { width: 100%; margin-top: 12px; }
+.seek-hint { color: var(--muted); font-size: 0.78rem; margin: 8px 0 0; }
+.transcript .seg { cursor: pointer; border-radius: 4px; transition: background 0.1s; }
+.transcript .seg:hover { background: rgba(99, 102, 241, 0.22); }
+.transcript .seg.active { background: rgba(99, 102, 241, 0.32); }
+
 /* Editable transcript */
 .transcript[contenteditable="true"] {
   outline: 1px solid var(--primary);

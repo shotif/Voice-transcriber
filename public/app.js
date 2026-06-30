@@ -29,6 +29,8 @@
     result: $("result"),
     transcript: $("transcript"),
     langBadge: $("langBadge"),
+    resultAudio: $("resultAudio"),
+    seekHint: $("seekHint"),
     copyBtn: $("copyBtn"),
     editBtn: $("editBtn"),
     shareBtn: $("shareBtn"),
@@ -63,6 +65,9 @@
   let currentTranscript = ""; // text backing the visible result card
   let currentHistoryId = null; // id of the history entry shown in the result card
   let historyQuery = ""; // current history search filter
+  let ownedAudioUrl = null; // object URL we created from IndexedDB (must revoke)
+  let segSpans = []; // {span, start, end} for the clickable transcript
+  const AUDIO_KEEP = 20; // keep audio in IndexedDB only for the newest N entries
   let currentAbort = null; // AbortController for the in-flight transcription
   let mediaRecorder = null; // MediaRecorder while recording
   let recChunks = [];
@@ -278,7 +283,10 @@
         at: Date.now(),
       });
       currentHistoryId = id;
-      renderResult(text, lang, undefined, id);
+      const words = Array.isArray(data.words) ? data.words : [];
+      // Persist audio + word timings so "listen to a part" works later too.
+      if (currentFile) idbPut({ id, blob: currentFile, words, at: Date.now() }).then(pruneAudio);
+      renderResult(text, lang, { histId: id, words, audioUrl: currentObjectUrl, audioOwned: false });
       generateTitle(id, text); // background AI title (exempt from rate limit)
     } catch (err) {
       if (err && err.name === "AbortError") {
@@ -305,10 +313,159 @@
     translate: "Prijevod",
   };
 
-  function renderResult(text, lang, summary, histId) {
+  // ----- IndexedDB: audio clips + word timestamps, keyed by history id -----
+  const AUDIO_DB = "glas-audio";
+  const AUDIO_STORE = "clips";
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      const r = indexedDB.open(AUDIO_DB, 1);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        if (!db.objectStoreNames.contains(AUDIO_STORE))
+          db.createObjectStore(AUDIO_STORE, { keyPath: "id" });
+      };
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+  async function idbPut(rec) {
+    try {
+      const db = await idbOpen();
+      await new Promise((res, rej) => {
+        const tx = db.transaction(AUDIO_STORE, "readwrite");
+        tx.objectStore(AUDIO_STORE).put(rec);
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+      db.close();
+    } catch {
+      /* IndexedDB unavailable — seek-on-history just won't work */
+    }
+  }
+  async function idbGet(id) {
+    try {
+      const db = await idbOpen();
+      const rec = await new Promise((res, rej) => {
+        const rq = db.transaction(AUDIO_STORE, "readonly").objectStore(AUDIO_STORE).get(id);
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => rej(rq.error);
+      });
+      db.close();
+      return rec || null;
+    } catch {
+      return null;
+    }
+  }
+  async function idbDelete(id) {
+    try {
+      const db = await idbOpen();
+      await new Promise((res) => {
+        const tx = db.transaction(AUDIO_STORE, "readwrite");
+        tx.objectStore(AUDIO_STORE).delete(id);
+        tx.oncomplete = res;
+        tx.onerror = res;
+      });
+      db.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  async function idbKeys() {
+    try {
+      const db = await idbOpen();
+      const keys = await new Promise((res, rej) => {
+        const rq = db.transaction(AUDIO_STORE, "readonly").objectStore(AUDIO_STORE).getAllKeys();
+        rq.onsuccess = () => res(rq.result || []);
+        rq.onerror = () => rej(rq.error);
+      });
+      db.close();
+      return keys;
+    } catch {
+      return [];
+    }
+  }
+  // Keep audio only for the newest AUDIO_KEEP history entries.
+  async function pruneAudio() {
+    try {
+      const keep = new Set(
+        readHistory().sort((a, b) => b.at - a.at).slice(0, AUDIO_KEEP).map((e) => e.id),
+      );
+      for (const k of await idbKeys()) if (!keep.has(k)) await idbDelete(k);
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  // ----- clickable, timestamped transcript -----
+  function buildSegments(words) {
+    const segs = [];
+    let cur = [];
+    const flush = () => {
+      if (!cur.length) return;
+      segs.push({
+        text: cur.map((w) => w.t).join(" "),
+        start: cur[0].s,
+        end: cur[cur.length - 1].e,
+      });
+      cur = [];
+    };
+    for (const w of words) {
+      cur.push(w);
+      if (/[.!?…:]$/.test(w.t) || cur.length >= 14) flush();
+    }
+    flush();
+    return segs;
+  }
+  function seekTo(start) {
+    if (!el.resultAudio.src) return;
+    try {
+      el.resultAudio.currentTime = start;
+      el.resultAudio.play().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  function setResultAudio(url, owned) {
+    if (ownedAudioUrl && ownedAudioUrl !== url) {
+      URL.revokeObjectURL(ownedAudioUrl);
+      ownedAudioUrl = null;
+    }
+    if (url) {
+      el.resultAudio.src = url;
+      show(el.resultAudio);
+      if (owned) ownedAudioUrl = url;
+    } else {
+      el.resultAudio.removeAttribute("src");
+      el.resultAudio.load();
+      hide(el.resultAudio);
+    }
+  }
+  function renderTranscript(text, words) {
+    segSpans = [];
+    el.transcript.innerHTML = "";
+    const interactive = Array.isArray(words) && words.length && el.resultAudio.src;
+    if (interactive) {
+      buildSegments(words).forEach((seg) => {
+        const span = document.createElement("span");
+        span.className = "seg";
+        span.textContent = seg.text + " ";
+        span.addEventListener("click", () => seekTo(seg.start));
+        el.transcript.appendChild(span);
+        segSpans.push({ span, start: seg.start, end: seg.end });
+      });
+      show(el.seekHint);
+    } else {
+      el.transcript.textContent = text;
+      hide(el.seekHint);
+    }
+  }
+
+  function renderResult(text, lang, opts) {
+    opts = opts || {};
     currentTranscript = text;
-    currentHistoryId = histId ?? currentHistoryId;
-    el.transcript.textContent = text;
+    currentHistoryId = opts.histId ?? currentHistoryId;
+    setResultAudio(opts.audioUrl || null, !!opts.audioOwned);
+    renderTranscript(text, opts.words);
     el.transcript.contentEditable = "false";
     el.editBtn.textContent = "Uredi";
     el.langBadge.textContent = lang === "hr" ? "hrvatski" : lang;
@@ -318,9 +475,9 @@
     hide(el.aiLoading);
     hide(el.askForm);
     el.aiActions.classList.toggle("hidden", !summarizeEnabled);
-    if (summary) {
+    if (opts.summary) {
       el.aiBadge.textContent = AI_LABELS.summary;
-      el.aiResult.textContent = summary;
+      el.aiResult.textContent = opts.summary;
       show(el.aiWrap);
     } else {
       hide(el.aiWrap);
@@ -497,6 +654,7 @@
   }
   function deleteHistoryEntry(id) {
     writeHistory(readHistory().filter((e) => e.id !== id));
+    idbDelete(id); // drop its stored audio too
     renderHistory();
   }
   // Background AI title (exempt from the daily limit server-side).
@@ -623,8 +781,22 @@
       );
       li.appendChild(actions);
 
-      li.addEventListener("click", () => {
-        renderResult(item.text, item.lang || "hr", item.summary, item.id);
+      li.addEventListener("click", async () => {
+        // Load stored audio + word timings (if still kept) for click-to-seek.
+        let words = null;
+        let audioUrl = null;
+        const rec = await idbGet(item.id);
+        if (rec && rec.blob) {
+          audioUrl = URL.createObjectURL(rec.blob);
+          words = rec.words;
+        }
+        renderResult(item.text, item.lang || "hr", {
+          summary: item.summary,
+          histId: item.id,
+          words,
+          audioUrl,
+          audioOwned: true,
+        });
         copyText(item.text, el.copyBtn);
       });
       el.historyList.appendChild(li);
@@ -761,6 +933,10 @@
   // Edit the transcript inline; save changes back to the history entry.
   function toggleEdit() {
     if (!el.transcript.isContentEditable) {
+      // Flatten to plain text for editing (clickable segments can't be edited).
+      segSpans = [];
+      el.transcript.textContent = currentTranscript;
+      hide(el.seekHint);
       el.transcript.contentEditable = "true";
       el.editBtn.textContent = "Spremi";
       el.transcript.focus();
@@ -821,6 +997,13 @@
   el.copyBtn.addEventListener("click", () => copyText(el.transcript.textContent, el.copyBtn));
   el.editBtn.addEventListener("click", toggleEdit);
   el.shareBtn.addEventListener("click", shareCurrent);
+  el.resultAudio.addEventListener("timeupdate", () => {
+    if (!segSpans.length) return;
+    const t = el.resultAudio.currentTime;
+    for (const s of segSpans) {
+      s.span.classList.toggle("active", t >= s.start && t < s.end);
+    }
+  });
   el.exportAll.addEventListener("click", exportAllHistory);
   el.historySearch.addEventListener("input", () => {
     historyQuery = el.historySearch.value;

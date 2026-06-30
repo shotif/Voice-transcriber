@@ -108,7 +108,7 @@ function handleHealth(env: Env): Response {
   return json({
     ok: true,
     route: "/api/transcribe",
-    api_version: "raw-body+format-text+admin", // canary: confirms latest deploy
+    api_version: "ai+archive+timestamps", // canary: confirms latest deploy
     accepts: "multipart 'file' field OR raw audio body; ?format=text for plain text",
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
@@ -331,11 +331,20 @@ async function transcribeToJSON(
     ctx.waitUntil(logUsage(env, { deviceId, label, kind: "transcribe" }));
   }
 
+  // Word-level timestamps (Scribe `words`: {text, start, end, type}). Keep only
+  // real words with numeric times, compacted to {t,s,e}, for click-to-seek.
+  const words = Array.isArray(result?.words)
+    ? result.words
+        .filter((w: any) => w?.type === "word" && typeof w?.start === "number")
+        .map((w: any) => ({ t: String(w.text ?? ""), s: w.start, e: w.end }))
+    : [];
+
   return json({
     text,
     language_code: lang,
     language_probability: result?.language_probability ?? null,
     model_id: modelId,
+    words,
   });
 }
 
