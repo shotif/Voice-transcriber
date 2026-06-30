@@ -179,6 +179,37 @@ audio { width: 100%; margin-bottom: 12px; }
 .summary-wrap { margin-top: 16px; padding-top: 14px; border-top: 1px solid #2b2d4d; }
 .summary-loading { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--muted); font-size: 0.9rem; }
 .summary-loading .spinner { width: 20px; height: 20px; border-width: 2px; }
+
+/* AI tool chips */
+.ai-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.chip {
+  border: 1px solid #3a3c63;
+  background: var(--card-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chip:hover { border-color: var(--primary); }
+.chip:disabled { opacity: 0.5; cursor: progress; }
+.chip-group { display: inline-flex; align-items: stretch; gap: 0; }
+.chip-group .chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.chip-select {
+  border: 1px solid #3a3c63;
+  border-left: 0;
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 0 999px 999px 0;
+  padding: 0 10px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.ask-form { display: flex; gap: 8px; margin-top: 12px; }
+.ask-form .text-input { margin-bottom: 0; }
+.ask-form .copy-btn { flex-shrink: 0; }
 .badge {
   font-size: 0.72rem;
   text-transform: uppercase;

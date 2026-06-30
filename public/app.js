@@ -30,11 +30,16 @@
     transcript: $("transcript"),
     langBadge: $("langBadge"),
     copyBtn: $("copyBtn"),
-    summarizeBtn: $("summarizeBtn"),
-    summaryWrap: $("summaryWrap"),
-    summary: $("summary"),
-    copySummaryBtn: $("copySummaryBtn"),
-    summaryLoading: $("summaryLoading"),
+    aiActions: $("aiActions"),
+    transLang: $("transLang"),
+    askForm: $("askForm"),
+    askInput: $("askInput"),
+    aiWrap: $("aiWrap"),
+    aiBadge: $("aiBadge"),
+    aiResult: $("aiResult"),
+    copyAiBtn: $("copyAiBtn"),
+    aiLoading: $("aiLoading"),
+    aiLoadingLabel: $("aiLoadingLabel"),
     historySection: $("historySection"),
     historyList: $("historyList"),
     clearHistory: $("clearHistory"),
@@ -283,69 +288,93 @@
     }
   }
 
+  const AI_LABELS = {
+    summary: "AI sažetak",
+    actions: "Zadaci i datumi",
+    cleanup: "Sređeni tekst",
+    ask: "Odgovor",
+    translate: "Prijevod",
+  };
+
   function renderResult(text, lang, summary) {
     currentTranscript = text;
     el.transcript.textContent = text;
     el.langBadge.textContent = lang === "hr" ? "hrvatski" : lang;
     el.copyBtn.classList.remove("copied");
     el.copyBtn.textContent = "Copy";
-    // Reset summary UI for this result.
-    hide(el.summaryLoading);
+    // Reset AI UI for this result.
+    hide(el.aiLoading);
+    hide(el.askForm);
+    el.aiActions.classList.toggle("hidden", !summarizeEnabled);
     if (summary) {
-      el.summary.textContent = summary;
-      show(el.summaryWrap);
-      hide(el.summarizeBtn);
+      el.aiBadge.textContent = AI_LABELS.summary;
+      el.aiResult.textContent = summary;
+      show(el.aiWrap);
     } else {
-      hide(el.summaryWrap);
-      el.summary.textContent = "";
-      if (summarizeEnabled) {
-        el.summarizeBtn.classList.remove("hidden");
-        el.summarizeBtn.disabled = false;
-        el.summarizeBtn.textContent = "Sažmi";
-      }
+      hide(el.aiWrap);
+      el.aiResult.textContent = "";
     }
     show(el.result);
     el.result.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  async function summarizeCurrent() {
+  function setChipsDisabled(disabled) {
+    el.aiActions.querySelectorAll(".chip").forEach((b) => (b.disabled = disabled));
+  }
+
+  async function runAi(task, opts) {
+    opts = opts || {};
     const text = currentTranscript.trim();
     if (!text) return;
-    hide(el.summaryWrap);
-    show(el.summaryLoading);
-    el.summarizeBtn.disabled = true;
+    const label = AI_LABELS[task] || "AI";
+    hide(el.aiWrap);
+    el.aiLoadingLabel.textContent = label + "…";
+    show(el.aiLoading);
+    setChipsDisabled(true);
     try {
       const headers = { "content-type": "application/json" };
       const pass = getPass();
       if (pass) headers["x-app-passcode"] = pass;
-      const res = await fetch("/api/summarize", {
+      const name = getName();
+      if (name) headers["x-user-label"] = encodeURIComponent(name);
+      const deviceId = getDeviceId();
+      if (deviceId) headers["x-device-id"] = deviceId;
+
+      const reqBody = { task, text };
+      if (task === "translate") reqBody.lang = el.transLang.value;
+      if (task === "ask") reqBody.question = opts.question || "";
+
+      const res = await fetch("/api/ai", {
         method: "POST",
         headers,
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(reqBody),
       });
       let data;
       try {
         data = await res.json();
       } catch {
-        throw new Error(`Server returned an unreadable response (HTTP ${res.status}).`);
+        throw new Error(`Nečitljiv odgovor (HTTP ${res.status}).`);
       }
       if (res.status === 401) {
         setPass("");
         showUnlock("Pogrešan pristupni kôd. Pokušaj ponovno.");
         return;
       }
-      if (!res.ok) throw new Error(data?.error || `Sažimanje nije uspjelo (HTTP ${res.status}).`);
-      const summary = (data.summary || "").trim();
-      if (!summary) throw new Error("Sažetak je stigao prazan.");
-      el.summary.textContent = summary;
-      show(el.summaryWrap);
-      hide(el.summarizeBtn);
-      updateHistorySummary(text, summary);
+      if (!res.ok) throw new Error(data?.error || `AI nije uspio (HTTP ${res.status}).`);
+      const result = (data.result || "").trim();
+      if (!result) throw new Error("AI je vratio prazno.");
+      el.aiBadge.textContent =
+        task === "translate"
+          ? "Prijevod (" + (el.transLang.selectedOptions[0]?.text || "") + ")"
+          : label;
+      el.aiResult.textContent = result;
+      show(el.aiWrap);
+      if (task === "summary") updateHistorySummary(text, result);
     } catch (err) {
-      el.summarizeBtn.disabled = false;
-      toast(err.message || "Sažimanje nije uspjelo.");
+      toast(err.message || "AI nije uspio.");
     } finally {
-      hide(el.summaryLoading);
+      hide(el.aiLoading);
+      setChipsDisabled(false);
     }
   }
 
@@ -508,9 +537,9 @@
       show(el.changeCode);
       if (!getPass()) showUnlock("Unesi pristupni kôd da koristiš transkripciju.");
     }
-    // If a result is already on screen (e.g. from history), reveal the button now.
-    if (summarizeEnabled && !el.result.classList.contains("hidden") && el.summaryWrap.classList.contains("hidden")) {
-      el.summarizeBtn.classList.remove("hidden");
+    // If a result is already on screen (e.g. from history), reveal AI tools now.
+    if (summarizeEnabled && !el.result.classList.contains("hidden")) {
+      el.aiActions.classList.remove("hidden");
     }
   }
 
@@ -590,8 +619,23 @@
   el.cancelBtn.addEventListener("click", () => {
     if (currentAbort) currentAbort.abort();
   });
-  el.summarizeBtn.addEventListener("click", summarizeCurrent);
-  el.copySummaryBtn.addEventListener("click", () => copyText(el.summary.textContent, el.copySummaryBtn));
+  el.aiActions.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip");
+    if (!btn) return;
+    const task = btn.dataset.task;
+    if (task === "ask") {
+      el.askForm.classList.toggle("hidden");
+      if (!el.askForm.classList.contains("hidden")) el.askInput.focus();
+      return;
+    }
+    runAi(task);
+  });
+  el.askForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = el.askInput.value.trim();
+    if (q) runAi("ask", { question: q });
+  });
+  el.copyAiBtn.addEventListener("click", () => copyText(el.aiResult.textContent, el.copyAiBtn));
   el.unlockForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const code = el.passcodeInput.value.trim();

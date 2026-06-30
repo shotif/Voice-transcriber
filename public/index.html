@@ -115,24 +115,45 @@
       <section id="result" class="card hidden">
         <div class="result-head">
           <span class="badge" id="langBadge">hrvatski</span>
-          <div class="result-actions">
-            <button id="summarizeBtn" class="copy-btn hidden" type="button">Sažmi</button>
-            <button id="copyBtn" class="copy-btn" type="button">Copy</button>
-          </div>
+          <button id="copyBtn" class="copy-btn" type="button">Copy</button>
         </div>
         <p id="transcript" class="transcript"></p>
 
-        <!-- AI summary sub-card -->
-        <div id="summaryWrap" class="summary-wrap hidden">
-          <div class="result-head">
-            <span class="badge badge-ai">AI sažetak</span>
-            <button id="copySummaryBtn" class="copy-btn" type="button">Copy</button>
-          </div>
-          <p id="summary" class="transcript"></p>
+        <!-- AI tools (shown only when summaries are configured server-side) -->
+        <div id="aiActions" class="ai-actions hidden">
+          <button class="chip" type="button" data-task="summary">Sažmi</button>
+          <button class="chip" type="button" data-task="actions">Zadaci</button>
+          <button class="chip" type="button" data-task="cleanup">Sredi</button>
+          <button class="chip" type="button" data-task="ask">Pitaj</button>
+          <span class="chip-group">
+            <button class="chip" type="button" data-task="translate">Prevedi</button>
+            <select id="transLang" class="chip-select" aria-label="Jezik prijevoda">
+              <option value="engleski">EN</option>
+              <option value="njemački">DE</option>
+              <option value="talijanski">IT</option>
+              <option value="španjolski">ES</option>
+              <option value="francuski">FR</option>
+            </select>
+          </span>
         </div>
-        <div id="summaryLoading" class="summary-loading hidden">
+
+        <!-- Ask-a-question input (revealed by 'Pitaj') -->
+        <form id="askForm" class="ask-form hidden" autocomplete="off">
+          <input id="askInput" class="text-input" type="text" placeholder="Pitaj nešto o ovoj poruci…" />
+          <button class="copy-btn" type="submit">Pitaj</button>
+        </form>
+
+        <!-- AI output sub-card -->
+        <div id="aiWrap" class="summary-wrap hidden">
+          <div class="result-head">
+            <span class="badge badge-ai" id="aiBadge">AI</span>
+            <button id="copyAiBtn" class="copy-btn" type="button">Copy</button>
+          </div>
+          <p id="aiResult" class="transcript"></p>
+        </div>
+        <div id="aiLoading" class="summary-loading hidden">
           <div class="spinner" aria-hidden="true"></div>
-          <span>Sažimam…</span>
+          <span id="aiLoadingLabel">AI radi…</span>
         </div>
       </section>
 

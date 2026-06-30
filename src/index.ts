@@ -83,8 +83,11 @@ export default {
       return json({ error: "Method not allowed." }, 405);
     }
 
-    if (url.pathname === "/api/summarize" && request.method === "POST")
-      return handleSummarize(request, env);
+    if (
+      (url.pathname === "/api/ai" || url.pathname === "/api/summarize") &&
+      request.method === "POST"
+    )
+      return handleAi(request, env, ctx);
 
     // Admin log (owner-only; requires D1 binding DB + ADMIN_PASSWORD secret).
     if (url.pathname === "/api/admin/list" && request.method === "GET")
@@ -325,6 +328,7 @@ async function transcribeToJSON(
     ctx.waitUntil(
       logTranscript(env, { label, filename, lang, text, deviceId, seconds }),
     );
+    ctx.waitUntil(logUsage(env, { deviceId, label, kind: "transcribe" }));
   }
 
   return json({
@@ -335,7 +339,7 @@ async function transcribeToJSON(
   });
 }
 
-// ---------- AI summary (Claude API) ----------
+// ---------- AI text tools (Claude API) ----------
 const SUMMARY_SYSTEM =
   "Ti si pomoćnik koji sažima glasovne poruke na hrvatskom. Korisnik ti daje " +
   "prijepis (transkript) glasovne poruke. Odgovori ISKLJUČIVO na hrvatskom, " +
@@ -345,109 +349,225 @@ const SUMMARY_SYSTEM =
   "3) Ako postoje, odvojeno navedi 'Zadaci/akcije:' kao bullete; ako ih nema, izostavi taj dio.\n" +
   "Ne izmišljaj sadržaj koji nije u prijepisu.";
 
-async function handleSummarize(request: Request, env: Env): Promise<Response> {
-  const wantsText =
-    new URL(request.url).searchParams.get("format") === "text" ||
-    (request.headers.get("accept") || "").includes("text/plain");
-  const out = (summary: string, errorStatus?: number, errorMsg?: string) => {
-    if (wantsText) {
-      return new Response(errorMsg ?? summary, {
-        status: errorStatus ?? 200,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+type AiTask = "summary" | "cleanup" | "translate" | "actions" | "ask" | "title";
+
+// Build the Claude system + user content for a given task. Returns an error
+// string when the task's inputs are invalid.
+function buildAi(
+  task: AiTask,
+  body: { text: string; lang?: string; question?: string },
+): { system: string; user: string; maxTokens: number } | { error: string } {
+  const text = body.text;
+  switch (task) {
+    case "summary":
+      return { system: SUMMARY_SYSTEM, user: text, maxTokens: 1024 };
+    case "cleanup":
+      return {
+        system:
+          "Uredi i formatiraj sljedeći transkript na hrvatskom: ispravi interpunkciju i velika slova, " +
+          "podijeli u logične odlomke, ukloni poštapalice (npr. ovaj, znači, kao) i ponavljanja. " +
+          "NEMOJ mijenjati značenje niti dodavati sadržaj. Vrati samo sređeni tekst, bez uvoda.",
+        user: text,
+        maxTokens: 2048,
+      };
+    case "translate": {
+      const lang = (body.lang || "engleski").slice(0, 40);
+      return {
+        system: `Prevedi sljedeći tekst na ${lang}. Vrati isključivo prijevod, bez komentara i bez originala.`,
+        user: text,
+        maxTokens: 2048,
+      };
     }
-    return errorMsg
-      ? json({ error: errorMsg }, errorStatus ?? 500)
-      : json({ summary });
-  };
-
-  // Same shared access gate as transcription.
-  if (env.APP_PASSCODE) {
-    const provided = request.headers.get("x-app-passcode") || "";
-    if (!safeEqual(provided, env.APP_PASSCODE)) {
-      return out("", 401, "Wrong or missing access code.");
+    case "actions":
+      return {
+        system:
+          "Iz sljedećeg transkripta izvuci, na hrvatskom, samo ono što stvarno postoji:\n" +
+          "'Zadaci:' (• obaveze/akcije, s vremenom ako je navedeno)\n" +
+          "'Datumi i vrijeme:' (• spomenuti termini)\n" +
+          "'Kontakti:' (• imena, telefoni, e-mailovi)\n" +
+          "Izostavi prazne sekcije. Ako nema ničega od navedenog, napiši: 'Nema zadataka, datuma ni kontakata.'",
+        user: text,
+        maxTokens: 1024,
+      };
+    case "ask": {
+      const q = (body.question || "").trim();
+      if (!q) return { error: "Nedostaje pitanje." };
+      return {
+        system:
+          "Odgovori na korisnikovo pitanje ISKLJUČIVO na temelju danog transkripta, na hrvatskom. " +
+          "Ako odgovor nije u transkriptu, reci: 'To nije spomenuto u poruci.'",
+        user: `Transkript:\n${text}\n\nPitanje: ${q}`,
+        maxTokens: 1024,
+      };
     }
+    case "title":
+      return {
+        system:
+          "Vrati vrlo kratak naslov (3 do 6 riječi) na hrvatskom za ovaj prijepis. " +
+          "Vrati samo naslov, bez navodnika i bez interpunkcije na kraju.",
+        user: text.slice(0, 4000),
+        maxTokens: 32,
+      };
+    default:
+      return { error: "Nepoznata radnja." };
   }
-  if (!env.ANTHROPIC_API_KEY) {
-    return out("", 503, "Summaries are not configured (set ANTHROPIC_API_KEY).");
-  }
+}
 
-  let text = "";
-  try {
-    const body: any = await request.json();
-    text = typeof body?.text === "string" ? body.text : "";
-  } catch {
-    return out("", 400, "Expected JSON body { text }.");
-  }
-  text = text.trim();
-  if (!text) return out("", 400, "No transcript text to summarize.");
-  if (text.length > MAX_SUMMARY_CHARS) text = text.slice(0, MAX_SUMMARY_CHARS);
-
+// Single Claude Messages call. Returns the joined text, or an error shape.
+async function callClaude(
+  env: Env,
+  system: string,
+  user: string,
+  maxTokens: number,
+): Promise<{ text: string } | { error: string; status: number }> {
   const model = env.ANTHROPIC_MODEL || DEFAULT_SUMMARY_MODEL;
   let res: Response;
   try {
     res = await fetch(ANTHROPIC_URL, {
       method: "POST",
       headers: {
-        "x-api-key": env.ANTHROPIC_API_KEY,
+        "x-api-key": env.ANTHROPIC_API_KEY!,
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1024,
-        system: SUMMARY_SYSTEM,
-        messages: [{ role: "user", content: text }],
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }],
       }),
     });
   } catch {
-    return out("", 502, "Could not reach the summary service. Try again.");
+    return { error: "Could not reach the AI service. Try again.", status: 502 };
   }
-
   if (!res.ok) {
     let detail = "";
     try {
-      const e: any = await res.json();
-      detail = e?.error?.message || "";
+      detail = ((await res.json()) as any)?.error?.message || "";
     } catch {
       /* ignore */
     }
     const hint = res.status === 401 ? "The ANTHROPIC_API_KEY appears invalid." : "";
-    return out("", res.status === 401 ? 502 : res.status, `Summary failed (HTTP ${res.status}). ${hint} ${detail}`.trim());
+    return {
+      error: `AI request failed (HTTP ${res.status}). ${hint} ${detail}`.trim(),
+      status: res.status === 401 ? 502 : res.status,
+    };
   }
-
   let data: any;
   try {
     data = await res.json();
   } catch {
-    return out("", 502, "Summary service returned an unexpected response.");
+    return { error: "AI service returned an unexpected response.", status: 502 };
   }
-  // Claude returns content as an array of blocks; collect the text blocks.
-  const summary: string = Array.isArray(data?.content)
+  const text: string = Array.isArray(data?.content)
     ? data.content
         .filter((b: any) => b?.type === "text" && typeof b.text === "string")
         .map((b: any) => b.text)
         .join("\n")
         .trim()
     : "";
-  if (!summary) return out("", 502, "The summary came back empty.");
-  return out(summary);
+  if (!text) return { error: "AI je vratio prazan odgovor.", status: 502 };
+  return { text };
+}
+
+async function handleAi(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const wantsText =
+    url.searchParams.get("format") === "text" ||
+    (request.headers.get("accept") || "").includes("text/plain");
+  const out = (result: string, task?: AiTask, errorStatus?: number, errorMsg?: string) => {
+    if (wantsText) {
+      return new Response(errorMsg ?? result, {
+        status: errorStatus ?? 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+    if (errorMsg) return json({ error: errorMsg }, errorStatus ?? 500);
+    // `summary` alias kept for older clients that read data.summary.
+    return json(task === "summary" ? { result, summary: result } : { result });
+  };
+
+  if (env.APP_PASSCODE) {
+    const provided = request.headers.get("x-app-passcode") || "";
+    if (!safeEqual(provided, env.APP_PASSCODE)) {
+      return out("", undefined, 401, "Wrong or missing access code.");
+    }
+  }
+  if (!env.ANTHROPIC_API_KEY) {
+    return out("", undefined, 503, "AI nije konfiguriran (postavi ANTHROPIC_API_KEY).");
+  }
+  // Shared daily cap with transcription.
+  if (await overRateLimit(request, env)) {
+    return out("", undefined, 429, `Dnevni limit je dosegnut (${rateLimitPerDay(env)}/24h). Pokušaj kasnije.`);
+  }
+
+  let body: any = {};
+  try {
+    body = await request.json();
+  } catch {
+    return out("", undefined, 400, "Expected JSON body.");
+  }
+  // /api/summarize (no task) defaults to summary for backward compatibility.
+  const task = (body?.task || url.searchParams.get("task") || "summary") as AiTask;
+  let text = typeof body?.text === "string" ? body.text.trim() : "";
+  if (!text) return out("", task, 400, "Nema teksta za obradu.");
+  if (text.length > MAX_SUMMARY_CHARS) text = text.slice(0, MAX_SUMMARY_CHARS);
+
+  const built = buildAi(task, { text, lang: body?.lang, question: body?.question });
+  if ("error" in built) return out("", task, 400, built.error);
+
+  const r = await callClaude(env, built.system, built.user, built.maxTokens);
+  if ("error" in r) return out("", task, r.status, r.error);
+
+  // Count this AI call toward the shared daily cap.
+  if (env.DB) {
+    const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
+    const label = safeDecode(request.headers.get("x-user-label")).slice(0, 60) || "—";
+    ctx.waitUntil(logUsage(env, { deviceId, label, kind: "ai:" + task }));
+  }
+  return out(r.text, task);
 }
 
 // ---------- admin log (D1) ----------
 const SCHEMA =
   "CREATE TABLE IF NOT EXISTS transcripts (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, user_label TEXT, filename TEXT, lang TEXT, chars INTEGER, text TEXT)";
 
+const USAGE_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, device_id TEXT, user_label TEXT, kind TEXT)";
+
 // Create the table and add later columns. ALTER on an existing column throws
 // ("duplicate column name") — ignored, so this is a safe idempotent migration.
 async function ensureSchema(db: D1Database): Promise<void> {
   await db.prepare(SCHEMA).run();
+  await db.prepare(USAGE_SCHEMA).run();
   for (const col of ["device_id TEXT", "seconds REAL"]) {
     try {
       await db.prepare(`ALTER TABLE transcripts ADD COLUMN ${col}`).run();
     } catch {
       /* column already exists */
     }
+  }
+}
+
+// Records one billable action (transcription or AI call) for the shared daily
+// rate limit. Best-effort: never breaks the request.
+async function logUsage(
+  env: Env,
+  e: { deviceId: string; label: string; kind: string },
+): Promise<void> {
+  try {
+    await ensureSchema(env.DB!);
+    await env.DB!.prepare(
+      "INSERT INTO usage (created_at, device_id, user_label, kind) VALUES (?, ?, ?, ?)",
+    )
+      .bind(Date.now(), e.deviceId || null, e.label || null, e.kind)
+      .run();
+  } catch {
+    /* usage logging must never break the request */
   }
 }
 
@@ -532,8 +652,9 @@ async function overRateLimit(request: Request, env: Env): Promise<boolean> {
   try {
     await ensureSchema(env.DB);
     const since = Date.now() - 24 * 60 * 60 * 1000;
+    // Count BOTH transcriptions and AI calls (the shared daily cap).
     const row = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM transcripts WHERE ${column} = ? AND created_at > ?`,
+      `SELECT COUNT(*) AS n FROM usage WHERE ${column} = ? AND created_at > ?`,
     )
       .bind(value, since)
       .first<{ n: number }>();
