@@ -115,7 +115,11 @@
       <section id="result" class="card hidden">
         <div class="result-head">
           <span class="badge" id="langBadge">hrvatski</span>
-          <button id="copyBtn" class="copy-btn" type="button">Copy</button>
+          <div class="result-actions">
+            <button id="editBtn" class="copy-btn" type="button">Uredi</button>
+            <button id="shareBtn" class="copy-btn" type="button">Podijeli</button>
+            <button id="copyBtn" class="copy-btn" type="button">Copy</button>
+          </div>
         </div>
         <p id="transcript" class="transcript"></p>
 
@@ -160,9 +164,13 @@
       <!-- History -->
       <section id="historySection" class="history hidden">
         <div class="history-head">
-          <h2>Recent</h2>
-          <button id="clearHistory" class="link-btn" type="button">Clear all</button>
+          <h2>Povijest</h2>
+          <div class="history-head-actions">
+            <button id="exportAll" class="link-btn" type="button">Izvezi sve</button>
+            <button id="clearHistory" class="link-btn" type="button">Obriši sve</button>
+          </div>
         </div>
+        <input id="historySearch" class="text-input" type="text" placeholder="Pretraži povijest…" />
         <ul id="historyList" class="history-list"></ul>
       </section>
 

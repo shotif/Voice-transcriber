@@ -5,7 +5,7 @@
 (() => {
   "use strict";
 
-  const MAX_HISTORY = 10;
+  const MAX_HISTORY = 100;
   const HISTORY_KEY = "glas:history:v1";
   const PASS_KEY = "glas:passcode:v1";
   const NAME_KEY = "glas:username:v1";
@@ -30,6 +30,10 @@
     transcript: $("transcript"),
     langBadge: $("langBadge"),
     copyBtn: $("copyBtn"),
+    editBtn: $("editBtn"),
+    shareBtn: $("shareBtn"),
+    exportAll: $("exportAll"),
+    historySearch: $("historySearch"),
     aiActions: $("aiActions"),
     transLang: $("transLang"),
     askForm: $("askForm"),
@@ -57,6 +61,8 @@
   let currentObjectUrl = null;
   let summarizeEnabled = false; // learned from the health route
   let currentTranscript = ""; // text backing the visible result card
+  let currentHistoryId = null; // id of the history entry shown in the result card
+  let historyQuery = ""; // current history search filter
   let currentAbort = null; // AbortController for the in-flight transcription
   let mediaRecorder = null; // MediaRecorder while recording
   let recChunks = [];
@@ -264,13 +270,16 @@
         showError("No speech was detected in that audio. Try a different recording.");
         return;
       }
-      renderResult(text, data.language_code || "hr");
-      saveToHistory({
+      const lang = data.language_code || "hr";
+      const id = saveToHistory({
         text,
         name: currentFile.name || "voice-note",
-        lang: data.language_code || "hr",
+        lang,
         at: Date.now(),
       });
+      currentHistoryId = id;
+      renderResult(text, lang, undefined, id);
+      generateTitle(id, text); // background AI title (exempt from rate limit)
     } catch (err) {
       if (err && err.name === "AbortError") {
         hide(el.loading); // user cancelled — no error toast
@@ -296,9 +305,12 @@
     translate: "Prijevod",
   };
 
-  function renderResult(text, lang, summary) {
+  function renderResult(text, lang, summary, histId) {
     currentTranscript = text;
+    currentHistoryId = histId ?? currentHistoryId;
     el.transcript.textContent = text;
+    el.transcript.contentEditable = "false";
+    el.editBtn.textContent = "Uredi";
     el.langBadge.textContent = lang === "hr" ? "hrvatski" : lang;
     el.copyBtn.classList.remove("copied");
     el.copyBtn.textContent = "Copy";
@@ -369,7 +381,7 @@
           : label;
       el.aiResult.textContent = result;
       show(el.aiWrap);
-      if (task === "summary") updateHistorySummary(text, result);
+      if (task === "summary") updateHistoryEntry(currentHistoryId, { summary: result });
     } catch (err) {
       toast(err.message || "AI nije uspio.");
     } finally {
@@ -407,6 +419,16 @@
   }
 
   // ---------- history (localStorage) ----------
+  function genId() {
+    return (
+      (crypto?.randomUUID && crypto.randomUUID()) ||
+      "h-" + Date.now().toString(36) + Math.random().toString(36).slice(2)
+    );
+  }
+  function firstWordsTitle(text) {
+    const words = (text || "").trim().split(/\s+/).slice(0, 7).join(" ");
+    return words.length ? words : "Bez naslova";
+  }
   function readHistory() {
     try {
       const raw = localStorage.getItem(HISTORY_KEY);
@@ -418,67 +440,191 @@
   }
   function writeHistory(arr) {
     try {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(arr.slice(0, MAX_HISTORY)));
+      let keep = arr;
+      if (arr.length > MAX_HISTORY) {
+        const pinned = arr.filter((e) => e.pinned);
+        const unpinned = arr.filter((e) => !e.pinned);
+        keep = pinned.concat(unpinned).slice(0, Math.max(MAX_HISTORY, pinned.length));
+      }
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(keep));
     } catch {
       /* storage full / disabled — non-fatal */
     }
   }
+  // One-time backfill so older entries get id/title/tags/pinned.
+  function migrateHistory() {
+    const arr = readHistory();
+    let changed = false;
+    arr.forEach((e) => {
+      if (!e.id) {
+        e.id = genId();
+        changed = true;
+      }
+      if (!e.title) {
+        e.title = firstWordsTitle(e.text);
+        changed = true;
+      }
+      if (!Array.isArray(e.tags)) {
+        e.tags = [];
+        changed = true;
+      }
+    });
+    if (changed) writeHistory(arr);
+  }
   function saveToHistory(entry) {
     const arr = readHistory();
-    arr.unshift(entry);
+    const full = {
+      id: genId(),
+      title: firstWordsTitle(entry.text),
+      tags: [],
+      pinned: false,
+      ...entry,
+    };
+    arr.unshift(full);
     writeHistory(arr);
     renderHistory();
+    return full.id;
   }
-  // Attach a generated summary to the most recent matching history entry.
-  function updateHistorySummary(text, summary) {
+  function updateHistoryEntry(id, patch) {
+    if (!id) return;
     const arr = readHistory();
-    const item = arr.find((e) => e.text === text);
+    const item = arr.find((e) => e.id === id);
     if (item) {
-      item.summary = summary;
+      Object.assign(item, patch);
       writeHistory(arr);
       renderHistory();
     }
   }
+  function deleteHistoryEntry(id) {
+    writeHistory(readHistory().filter((e) => e.id !== id));
+    renderHistory();
+  }
+  // Background AI title (exempt from the daily limit server-side).
+  async function generateTitle(id, text) {
+    if (!summarizeEnabled || !id) return;
+    try {
+      const headers = { "content-type": "application/json" };
+      const pass = getPass();
+      if (pass) headers["x-app-passcode"] = pass;
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "title", text }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const title = (data.result || "").trim().replace(/^["'»«]+|["'«»]+$/g, "");
+      if (title) updateHistoryEntry(id, { title });
+    } catch {
+      /* keep the fallback title */
+    }
+  }
   function relativeTime(ts) {
     const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return "just now";
+    if (s < 60) return "upravo";
     const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ago`;
+    if (m < 60) return `prije ${m} min`;
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
+    if (h < 24) return `prije ${h} h`;
     const d = Math.floor(h / 24);
-    return d === 1 ? "yesterday" : `${d}d ago`;
+    return d === 1 ? "jučer" : `prije ${d} d`;
+  }
+  function matchesQuery(item, q) {
+    if (!q) return true;
+    const hay = [item.title, item.text, item.summary, item.name, (item.tags || []).join(" ")]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return hay.indexOf(q) >= 0;
   }
   function renderHistory() {
-    const arr = readHistory();
-    if (!arr.length) {
+    const all = readHistory();
+    if (!all.length) {
       hide(el.historySection);
       el.historyList.innerHTML = "";
       return;
     }
     show(el.historySection);
+    const q = historyQuery.trim().toLowerCase();
+    const rows = all
+      .filter((it) => matchesQuery(it, q))
+      .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.at - a.at);
+
     el.historyList.innerHTML = "";
-    arr.forEach((item) => {
+    rows.forEach((item) => {
       const li = document.createElement("li");
       li.className = "history-item";
 
       const top = document.createElement("div");
       top.className = "hi-top";
-      const name = document.createElement("span");
-      name.className = "hi-name";
-      name.textContent = item.name || "voice-note";
+      const title = document.createElement("span");
+      title.className = "hi-title";
+      title.textContent = (item.pinned ? "📌 " : "") + (item.title || firstWordsTitle(item.text));
       const time = document.createElement("span");
       time.className = "hi-time";
       time.textContent = relativeTime(item.at);
-      top.append(name, time);
+      top.append(title, time);
 
       const p = document.createElement("p");
       p.className = "hi-text";
-      p.textContent = item.text;
+      p.textContent = item.summary || item.text;
 
       li.append(top, p);
+
+      if (item.tags && item.tags.length) {
+        const tagWrap = document.createElement("div");
+        tagWrap.className = "hi-tags";
+        item.tags.forEach((t) => {
+          const chip = document.createElement("span");
+          chip.className = "hi-tag";
+          chip.textContent = "#" + t;
+          chip.addEventListener("click", (e) => {
+            e.stopPropagation();
+            el.historySearch.value = t;
+            historyQuery = t;
+            renderHistory();
+          });
+          tagWrap.appendChild(chip);
+        });
+        li.appendChild(tagWrap);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "hi-actions";
+      const mkAct = (label, cls, fn) => {
+        const b = document.createElement("button");
+        b.className = "hi-act" + (cls ? " " + cls : "");
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          fn();
+        });
+        return b;
+      };
+      actions.append(
+        mkAct(item.pinned ? "Otkvači" : "Prikvači", "", () =>
+          updateHistoryEntry(item.id, { pinned: !item.pinned }),
+        ),
+        mkAct("Preimenuj", "", () => {
+          const nv = prompt("Naslov:", item.title || "");
+          if (nv != null) updateHistoryEntry(item.id, { title: nv.trim() || firstWordsTitle(item.text) });
+        }),
+        mkAct("Tagovi", "", () => {
+          const nv = prompt("Tagovi (odvojeni zarezom):", (item.tags || []).join(", "));
+          if (nv != null) {
+            const tags = nv.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 8);
+            updateHistoryEntry(item.id, { tags });
+          }
+        }),
+        mkAct("Obriši", "danger", () => {
+          if (confirm("Obrisati ovaj zapis?")) deleteHistoryEntry(item.id);
+        }),
+      );
+      li.appendChild(actions);
+
       li.addEventListener("click", () => {
-        renderResult(item.text, item.lang || "hr", item.summary);
+        renderResult(item.text, item.lang || "hr", item.summary, item.id);
         copyText(item.text, el.copyBtn);
       });
       el.historyList.appendChild(li);
@@ -612,9 +758,74 @@
     if (f) setFile(f);
   });
 
+  // Edit the transcript inline; save changes back to the history entry.
+  function toggleEdit() {
+    if (!el.transcript.isContentEditable) {
+      el.transcript.contentEditable = "true";
+      el.editBtn.textContent = "Spremi";
+      el.transcript.focus();
+    } else {
+      el.transcript.contentEditable = "false";
+      el.editBtn.textContent = "Uredi";
+      const newText = el.transcript.textContent.trim();
+      if (newText && newText !== currentTranscript) {
+        currentTranscript = newText;
+        updateHistoryEntry(currentHistoryId, { text: newText });
+        toast("Spremljeno");
+      }
+    }
+  }
+  async function shareCurrent() {
+    const text = el.transcript.textContent;
+    if (!text) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+      } catch {
+        /* user cancelled */
+      }
+    } else {
+      copyText(text, el.shareBtn);
+    }
+  }
+  function downloadText(filename, content, mime) {
+    const blob = new Blob([content], { type: (mime || "text/plain") + ";charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function exportAllHistory() {
+    const arr = readHistory();
+    if (!arr.length) return;
+    const md = arr
+      .slice()
+      .sort((a, b) => b.at - a.at)
+      .map((e) => {
+        let s = `## ${e.title || firstWordsTitle(e.text)}\n*${new Date(e.at).toLocaleString()}*`;
+        if (e.tags && e.tags.length) s += ` — ${e.tags.map((t) => "#" + t).join(" ")}`;
+        s += `\n\n${e.text}\n`;
+        if (e.summary) s += `\n**Sažetak:**\n${e.summary}\n`;
+        return s;
+      })
+      .join("\n---\n\n");
+    downloadText("glas-povijest.md", md, "text/markdown");
+  }
+
   el.clearFile.addEventListener("click", clearFile);
   el.transcribeBtn.addEventListener("click", transcribe);
   el.copyBtn.addEventListener("click", () => copyText(el.transcript.textContent, el.copyBtn));
+  el.editBtn.addEventListener("click", toggleEdit);
+  el.shareBtn.addEventListener("click", shareCurrent);
+  el.exportAll.addEventListener("click", exportAllHistory);
+  el.historySearch.addEventListener("input", () => {
+    historyQuery = el.historySearch.value;
+    renderHistory();
+  });
   el.recordBtn.addEventListener("click", toggleRecord);
   el.cancelBtn.addEventListener("click", () => {
     if (currentAbort) currentAbort.abort();
@@ -650,10 +861,10 @@
   );
 
   el.clearHistory.addEventListener("click", () => {
-    if (confirm("Clear all saved transcripts?")) {
+    if (confirm("Obrisati cijelu povijest?")) {
       writeHistory([]);
       renderHistory();
-      toast("History cleared");
+      toast("Povijest obrisana");
     }
   });
 
@@ -667,6 +878,7 @@
     show(el.installHint);
   }
 
+  migrateHistory();
   renderHistory();
   initPasscodeGate();
   loadSharedAudio();

@@ -500,10 +500,6 @@ async function handleAi(
   if (!env.ANTHROPIC_API_KEY) {
     return out("", undefined, 503, "AI nije konfiguriran (postavi ANTHROPIC_API_KEY).");
   }
-  // Shared daily cap with transcription.
-  if (await overRateLimit(request, env)) {
-    return out("", undefined, 429, `Dnevni limit je dosegnut (${rateLimitPerDay(env)}/24h). Pokušaj kasnije.`);
-  }
 
   let body: any = {};
   try {
@@ -513,6 +509,13 @@ async function handleAi(
   }
   // /api/summarize (no task) defaults to summary for backward compatibility.
   const task = (body?.task || url.searchParams.get("task") || "summary") as AiTask;
+
+  // Auto-titles are tiny and fire automatically per transcription, so they're
+  // exempt from the shared daily cap (and not logged as usage). Everything else
+  // counts toward the cap.
+  if (task !== "title" && (await overRateLimit(request, env))) {
+    return out("", undefined, 429, `Dnevni limit je dosegnut (${rateLimitPerDay(env)}/24h). Pokušaj kasnije.`);
+  }
   let text = typeof body?.text === "string" ? body.text.trim() : "";
   if (!text) return out("", task, 400, "Nema teksta za obradu.");
   if (text.length > MAX_SUMMARY_CHARS) text = text.slice(0, MAX_SUMMARY_CHARS);
@@ -523,8 +526,8 @@ async function handleAi(
   const r = await callClaude(env, built.system, built.user, built.maxTokens);
   if ("error" in r) return out("", task, r.status, r.error);
 
-  // Count this AI call toward the shared daily cap.
-  if (env.DB) {
+  // Count this AI call toward the shared daily cap (titles are exempt).
+  if (env.DB && task !== "title") {
     const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
     const label = safeDecode(request.headers.get("x-user-label")).slice(0, 60) || "—";
     ctx.waitUntil(logUsage(env, { deviceId, label, kind: "ai:" + task }));

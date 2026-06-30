@@ -3,7 +3,7 @@
  * 2. Web Share Target: receives a POSTed audio file from Android's share sheet,
  *    stashes it in the Cache, and redirects into the transcribe flow.
  */
-const VERSION = "glas-v5";
+const VERSION = "glas-v6";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = "glas-share"; // holds the most recently shared audio
 const SHARED_AUDIO_URL = "/__shared-audio"; // internal cache key, never fetched from network

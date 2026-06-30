@@ -265,6 +265,7 @@ audio { width: 100%; margin-bottom: 12px; }
 .history-item .hi-top { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
 .history-item .hi-name { font-size: 0.8rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-item .hi-time { font-size: 0.72rem; color: var(--muted); flex-shrink: 0; }
+.history-item .hi-title { font-weight: 700; font-size: 0.95rem; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-item .hi-text {
   margin: 0;
   font-size: 0.92rem;
@@ -273,6 +274,39 @@ audio { width: 100%; margin-bottom: 12px; }
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.history-head-actions { display: flex; gap: 10px; }
+#historySearch { margin-bottom: 10px; }
+.hi-pin { color: var(--primary); margin-right: 4px; }
+.hi-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.hi-tag {
+  font-size: 0.72rem;
+  color: #c7c9ee;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.hi-actions { display: flex; gap: 6px; margin-top: 10px; }
+.hi-act {
+  background: var(--card-2);
+  border: 1px solid var(--line, #2b2d4d);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.hi-act:hover { color: var(--text); border-color: var(--primary); }
+.hi-act.danger:hover { color: #fecaca; border-color: var(--danger); }
+
+/* Editable transcript */
+.transcript[contenteditable="true"] {
+  outline: 1px solid var(--primary);
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 3em;
 }
 
 /* Footer */
