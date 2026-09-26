@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+  <TextView
+      android:id="@+id/status"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:textSize="16sp"
+      android:text="" />
+
+  <!-- Settings: shown from the launcher, or when the access code is missing. -->
+  <LinearLayout
+      android:id="@+id/settings"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:visibility="gone"
+      android:paddingTop="12dp">
+
+    <EditText
+        android:id="@+id/passInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Pristupni kôd"
+        android:inputType="textPassword"
+        android:importantForAutofill="no" />
+
+    <EditText
+        android:id="@+id/nameInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Tvoje ime (neobavezno)"
+        android:inputType="text"
+        android:maxLength="40"
+        android:importantForAutofill="no" />
+
+    <EditText
+        android:id="@+id/baseInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Adresa Glasa"
+        android:inputType="textUri"
+        android:importantForAutofill="no" />
+
+    <Button
+        android:id="@+id/saveBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Spremi" />
+  </LinearLayout>
+
+  <ScrollView
+      android:id="@+id/transcriptScroll"
+      android:layout_width="match_parent"
+      android:layout_height="0dp"
+      android:layout_weight="1"
+      android:visibility="gone"
+      android:paddingTop="12dp">
+
+    <TextView
+        android:id="@+id/transcript"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textIsSelectable="true"
+        android:textSize="16sp" />
+  </ScrollView>
+
+  <LinearLayout
+      android:id="@+id/actions"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="horizontal"
+      android:visibility="gone"
+      android:paddingTop="8dp">
+
+    <Button
+        android:id="@+id/copyBtn"
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:text="Kopiraj" />
+
+    <Button
+        android:id="@+id/shareBtn"
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:text="Podijeli" />
+
+    <Button
+        android:id="@+id/openBtn"
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:text="U Glas" />
+  </LinearLayout>
+
+</LinearLayout>

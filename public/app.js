@@ -72,6 +72,7 @@
   const AUDIO_MAX_CLIP = 8 * 1024 * 1024; // don't store clips larger than this
   const AUDIO_BUDGET = 40 * 1024 * 1024; // total audio kept on the device
   let currentAbort = null; // AbortController for the in-flight transcription
+  let afterUnlock = null; // retried once the access code is entered
   let mediaRecorder = null; // MediaRecorder while recording
   let recChunks = [];
   let recTimer = null;
@@ -931,6 +932,88 @@
       "Service worker nije bio aktivan pa poruka nije primljena. Otvori Glas jednom da se osvježi, pa ponovi dijeljenje.",
   };
 
+  // ---------- native Android handoff ----------
+  // The native share target transcribes on the Worker and then opens the app at
+  // /?pickup=<id>. Collect that transcript (and its clip) so it behaves exactly
+  // like one produced here: history entry, audio player, click-to-listen.
+  function b64ToBlob(b64, type) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: type || "audio/ogg" });
+  }
+
+  async function loadPickup() {
+    const params = new URLSearchParams(location.search);
+    const id = params.get("pickup");
+    if (!id) return false;
+    // Clean the URL so a refresh doesn't retry a one-shot pickup.
+    history.replaceState({}, "", location.pathname);
+    await collectPickup(id);
+    return true;
+  }
+
+  async function collectPickup(id) {
+    hide(el.error);
+    show(el.loading);
+    let res, data;
+    try {
+      const headers = {};
+      const pass = getPass();
+      if (pass) headers["x-app-passcode"] = pass;
+      res = await fetch("/api/pickup?id=" + encodeURIComponent(id), { headers });
+      data = await res.json();
+    } catch {
+      hide(el.loading);
+      showError("Ne mogu preuzeti prijepis s servera. Provjeri vezu i pokušaj ponovno.");
+      return;
+    }
+    hide(el.loading);
+
+    if (res.status === 401 && data?.code === "passcode") {
+      setPass("");
+      afterUnlock = () => collectPickup(id);
+      showUnlock("Unesi pristupni kôd da preuzmeš prijepis.");
+      return;
+    }
+    if (res.status === 404) {
+      showError("Taj prijepis je već preuzet ili je istekao. Prijepis i dalje imaš u aplikaciji koja je dijelila poruku.");
+      return;
+    }
+    const text = res.ok ? (data.text || "").trim() : "";
+    if (!text) {
+      showError(data?.error || "Prijepis nije stigao. Pokušaj ponovno.");
+      return;
+    }
+
+    const lang = data.language_code || "hr";
+    const name = data.filename || "voice-note";
+    const blob = data.audio_b64 ? b64ToBlob(data.audio_b64, data.audio_type) : null;
+    const histId = saveToHistory({
+      text,
+      name,
+      lang,
+      at: Date.now(),
+      audioBytes: blob ? blob.size : 0,
+    });
+    currentHistoryId = histId;
+    const words = Array.isArray(data.words) ? data.words : [];
+    let audioUrl = null;
+    if (blob) {
+      const file = new File([blob], name, { type: blob.type });
+      await idbPut({ id: histId, blob: file, words, at: Date.now() }).then(pruneAudio);
+      audioUrl = URL.createObjectURL(blob);
+    }
+    renderResult(text, lang, {
+      histId,
+      words: blob ? words : [],
+      audioUrl,
+      audioOwned: Boolean(audioUrl),
+    });
+    generateTitle(histId, text);
+    toast("Prijepis preuzet s telefona");
+  }
+
   async function loadSharedAudio() {
     const params = new URLSearchParams(location.search);
     if (!params.has("shared")) return;
@@ -1136,6 +1219,9 @@
     setName(el.nameInput.value.trim());
     hide(el.unlock);
     toast("Pristupni kôd spremljen");
+    const pending = afterUnlock;
+    afterUnlock = null;
+    if (pending) pending();
   });
   el.changeCode.addEventListener("click", () =>
     showUnlock("Unesi novi pristupni kôd."),
@@ -1167,5 +1253,7 @@
   migrateHistory();
   renderHistory();
   initPasscodeGate();
-  loadSharedAudio();
+  loadPickup().then((handled) => {
+    if (!handled) loadSharedAudio();
+  });
 })();

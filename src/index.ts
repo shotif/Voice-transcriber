@@ -96,6 +96,12 @@ export default {
       return Response.redirect(new URL("/?shared=1&err=nosw", url).toString(), 303);
 
     // Admin log (owner-only; requires D1 binding DB + ADMIN_PASSWORD secret).
+    // One-shot handoff pickup: the native Android share target transcribes via
+    // /api/transcribe?handoff=1 and then opens the app at /?pickup=<id>, which
+    // collects the transcript here so it lands in the browser's own history.
+    if (url.pathname === "/api/pickup" && request.method === "GET")
+      return handlePickup(request, env);
+
     if (url.pathname === "/api/admin/list" && request.method === "GET")
       return handleAdminList(request, env);
     if (url.pathname === "/api/admin/clear" && request.method === "POST")
@@ -114,7 +120,7 @@ function handleHealth(env: Env): Response {
   return json({
     ok: true,
     route: "/api/transcribe",
-    api_version: "sharefix-v13", // canary: confirms latest deploy
+    api_version: "native-v14", // canary: confirms latest deploy
     accepts: "multipart 'file' field OR raw audio body; ?format=text for plain text",
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
@@ -324,13 +330,14 @@ async function transcribeToJSON(
   const text: string = (result?.text ?? "").trim();
   const lang: string = result?.language_code ?? languageCode;
 
+  const label =
+    safeDecode(request.headers.get("x-user-label")).slice(0, 60) || "—";
+  const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
+  const secRaw = parseFloat(request.headers.get("x-audio-seconds") || "");
+  const seconds = Number.isFinite(secRaw) && secRaw > 0 ? secRaw : null;
+
   // Owner-only admin log. Fire-and-forget so it never delays/breaks the reply.
   if (env.DB && text) {
-    const label =
-      safeDecode(request.headers.get("x-user-label")).slice(0, 60) || "—";
-    const deviceId = (request.headers.get("x-device-id") || "").slice(0, 64);
-    const secRaw = parseFloat(request.headers.get("x-audio-seconds") || "");
-    const seconds = Number.isFinite(secRaw) && secRaw > 0 ? secRaw : null;
     ctx.waitUntil(
       logTranscript(env, { label, filename, lang, text, deviceId, seconds }),
     );
@@ -345,12 +352,40 @@ async function transcribeToJSON(
         .map((w: any) => ({ t: String(w.text ?? ""), s: w.start, e: w.end }))
     : [];
 
+  // The native Android share target asks for a handoff id so it can send the
+  // transcript on to the installed app, where it joins the local history.
+  let handoffId: string | null = null;
+  if (
+    new URL(request.url).searchParams.get("handoff") === "1" &&
+    env.DB &&
+    text
+  ) {
+    handoffId = crypto.randomUUID();
+    // Small clips ride along; a long one is dropped rather than risk the row
+    // limit, and the transcript is handed over on its own.
+    const audio =
+      file.size <= HANDOFF_MAX_AUDIO ? await file.arrayBuffer() : null;
+    ctx.waitUntil(
+      storeHandoff(env, {
+        id: handoffId,
+        filename,
+        lang,
+        text,
+        words,
+        seconds,
+        audio,
+        audioType: file.type || "audio/ogg",
+      }),
+    );
+  }
+
   return json({
     text,
     language_code: lang,
     language_probability: result?.language_probability ?? null,
     model_id: modelId,
     words,
+    handoff_id: handoffId,
   });
 }
 
@@ -554,6 +589,9 @@ async function handleAi(
 const SCHEMA =
   "CREATE TABLE IF NOT EXISTS transcripts (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, user_label TEXT, filename TEXT, lang TEXT, chars INTEGER, text TEXT)";
 
+const HANDOFF_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS handoff (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, filename TEXT, lang TEXT, text TEXT, words TEXT, seconds REAL, audio BLOB, audio_type TEXT)";
+
 const USAGE_SCHEMA =
   "CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, device_id TEXT, user_label TEXT, kind TEXT)";
 
@@ -562,6 +600,7 @@ const USAGE_SCHEMA =
 async function ensureSchema(db: D1Database): Promise<void> {
   await db.prepare(SCHEMA).run();
   await db.prepare(USAGE_SCHEMA).run();
+  await db.prepare(HANDOFF_SCHEMA).run();
   for (const col of ["device_id TEXT", "seconds REAL"]) {
     try {
       await db.prepare(`ALTER TABLE transcripts ADD COLUMN ${col}`).run();
@@ -587,6 +626,15 @@ async function logUsage(
   } catch {
     /* usage logging must never break the request */
   }
+}
+
+// Chunked so a clip of a megabyte cannot blow the argument limit.
+function toBase64(bytes: number[]): string {
+  let out = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK)
+    out += String.fromCharCode(...bytes.slice(i, i + CHUNK));
+  return btoa(out);
 }
 
 function safeDecode(v: string | null): string {
@@ -641,6 +689,106 @@ async function logTranscript(
       .run();
   } catch {
     /* logging must never break transcription */
+  }
+}
+
+// A transcript parked for the native Android share target to hand over. Rows
+// are one-shot (deleted on pickup) and short-lived, so nothing accumulates.
+const HANDOFF_TTL_MS = 60 * 60 * 1000;
+const HANDOFF_MAX_AUDIO = 1_200_000; // bytes; D1 caps a row at 2 MB
+
+async function storeHandoff(
+  env: Env,
+  e: {
+    id: string;
+    filename: string;
+    lang: string;
+    text: string;
+    words: unknown;
+    seconds: number | null;
+    audio: ArrayBuffer | null;
+    audioType: string;
+  },
+): Promise<void> {
+  try {
+    await ensureSchema(env.DB!);
+    await env
+      .DB!.prepare(
+        "INSERT INTO handoff (id, created_at, filename, lang, text, words, seconds, audio, audio_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .bind(
+        e.id,
+        Date.now(),
+        e.filename,
+        e.lang,
+        e.text,
+        JSON.stringify(e.words ?? []),
+        e.seconds,
+        e.audio ? [...new Uint8Array(e.audio)] : null,
+        e.audio ? e.audioType : null,
+      )
+      .run();
+    await env
+      .DB!.prepare("DELETE FROM handoff WHERE created_at < ?")
+      .bind(Date.now() - HANDOFF_TTL_MS)
+      .run();
+  } catch {
+    /* the native app still shows the transcript; handoff is a convenience */
+  }
+}
+
+async function handlePickup(request: Request, env: Env): Promise<Response> {
+  if (env.APP_PASSCODE) {
+    const provided = request.headers.get("x-app-passcode") || "";
+    if (!safeEqual(provided, env.APP_PASSCODE))
+      return json({ error: "Wrong or missing access code.", code: "passcode" }, 401);
+  }
+  if (!env.DB) return json({ error: "Handoff is not configured." }, 503);
+
+  const id = new URL(request.url).searchParams.get("id") || "";
+  if (!id) return json({ error: "Missing id." }, 400);
+
+  try {
+    await ensureSchema(env.DB);
+    const row = await env.DB.prepare(
+      "SELECT text, lang, words, filename, seconds, created_at, audio, audio_type FROM handoff WHERE id = ?",
+    )
+      .bind(id)
+      .first<{
+        text: string;
+        lang: string;
+        words: string;
+        filename: string;
+        seconds: number | null;
+        created_at: number;
+        audio: number[] | null;
+        audio_type: string | null;
+      }>();
+    if (!row) return json({ error: "Nothing to pick up.", code: "gone" }, 404);
+    // One-shot: the transcript now lives in the caller's history.
+    await env.DB.prepare("DELETE FROM handoff WHERE id = ?").bind(id).run();
+    if (Date.now() - row.created_at > HANDOFF_TTL_MS)
+      return json({ error: "Nothing to pick up.", code: "gone" }, 404);
+
+    let words: unknown = [];
+    try {
+      words = JSON.parse(row.words || "[]");
+    } catch {
+      /* keep the empty list */
+    }
+    return json({
+      text: row.text,
+      language_code: row.lang,
+      words,
+      filename: row.filename,
+      seconds: row.seconds,
+      // The clip travels with the transcript so the audio player and
+      // click-to-listen work on the native path too.
+      audio_b64: row.audio ? toBase64(row.audio) : null,
+      audio_type: row.audio_type,
+    });
+  } catch {
+    return json({ error: "Could not read the handoff." }, 500);
   }
 }
 

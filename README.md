@@ -37,6 +37,8 @@ database, no second service, no CORS.
 │   ├── glas.webmanifest      # PWA manifest + share_target
 │   ├── sw.js                  # service worker: offline shell + share intake
 │   └── icons/                 # generated PWA icons
+├── android/                   # native Android share target (see android/README.md)
+├── ios/                       # Apple Shortcut reference for iOS users
 ├── .env.example               # documents ELEVENLABS_API_KEY (safe to commit)
 ├── wrangler.toml              # Worker config: main + [assets] binding + compat date
 ├── package.json               # dev tooling only (no runtime deps)
