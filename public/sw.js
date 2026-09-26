@@ -3,7 +3,7 @@
  * 2. Web Share Target: receives a POSTed audio file from Android's share sheet,
  *    stashes it in the Cache, and redirects into the transcribe flow.
  */
-const VERSION = "glas-v7";
+const VERSION = "glas-v8";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = "glas-share"; // holds the most recently shared audio
 const SHARED_AUDIO_URL = "/__shared-audio"; // internal cache key, never fetched from network
@@ -79,22 +79,65 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+// Frees origin storage when a share write hits the quota. Old shell caches and
+// the stored audio clips are conveniences that can be rebuilt, so they go first.
+async function freeStorage() {
+  try {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter((k) => k !== SHARE_CACHE && k !== SHELL_CACHE)
+        .map((k) => caches.delete(k)),
+    );
+  } catch {
+    /* ignore */
+  }
+  try {
+    await new Promise((res) => {
+      const rq = indexedDB.deleteDatabase("glas-audio");
+      rq.onsuccess = rq.onerror = rq.onblocked = () => res();
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+async function stashShared(file) {
+  const headers = new Headers();
+  headers.set("content-type", file.type || "application/octet-stream");
+  headers.set("x-filename", encodeURIComponent(file.name || "shared-voice-note.ogg"));
+  const cache = await caches.open(SHARE_CACHE);
+  await cache.put(SHARED_AUDIO_URL, new Response(file, { headers }));
+}
+
 async function handleShare(request) {
+  // Never fail silently: the reason travels back on the redirect so the page can
+  // tell the user what happened instead of just opening empty.
+  let params = "?shared=1";
   try {
     const formData = await request.formData();
     const file = formData.get("audio") || formData.get("file");
-    if (file && file.size) {
-      const cache = await caches.open(SHARE_CACHE);
-      const headers = new Headers();
-      headers.set("content-type", file.type || "application/octet-stream");
-      headers.set("x-filename", encodeURIComponent(file.name || "shared-voice-note.ogg"));
-      await cache.put(SHARED_AUDIO_URL, new Response(file, { headers }));
+    if (!file || typeof file.size !== "number" || file.size === 0) {
+      params += "&err=nofile";
+    } else {
+      try {
+        await stashShared(file);
+      } catch {
+        // Almost certainly QuotaExceededError — free space and retry once.
+        await freeStorage();
+        try {
+          await stashShared(file);
+          params += "&note=freed";
+        } catch {
+          params += "&err=quota";
+        }
+      }
     }
-  } catch (err) {
-    // Fall through to redirect; the page will simply show no shared file.
+  } catch {
+    params += "&err=badform";
   }
   // 303 so the browser issues a GET for the landing page.
-  return Response.redirect("/?shared=1", 303);
+  return Response.redirect("/" + params, 303);
 }
 
 // Let the page retrieve + clear the shared audio.

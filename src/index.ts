@@ -89,6 +89,12 @@ export default {
     )
       return handleAi(request, env, ctx);
 
+    // Share-target fallback. Normally the service worker intercepts this POST
+    // and stashes the audio. If it reaches the Worker, no SW was controlling —
+    // redirect with a reason so the app can explain instead of erroring out.
+    if (url.pathname === "/share-target" && request.method === "POST")
+      return Response.redirect(new URL("/?shared=1&err=nosw", url).toString(), 303);
+
     // Admin log (owner-only; requires D1 binding DB + ADMIN_PASSWORD secret).
     if (url.pathname === "/api/admin/list" && request.method === "GET")
       return handleAdminList(request, env);
@@ -108,7 +114,7 @@ function handleHealth(env: Env): Response {
   return json({
     ok: true,
     route: "/api/transcribe",
-    api_version: "ai+archive+timestamps", // canary: confirms latest deploy
+    api_version: "sharefix-v9", // canary: confirms latest deploy
     accepts: "multipart 'file' field OR raw audio body; ?format=text for plain text",
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,

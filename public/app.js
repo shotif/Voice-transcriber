@@ -57,6 +57,7 @@
     passcodeInput: $("passcodeInput"),
     nameInput: $("nameInput"),
     changeCode: $("changeCode"),
+    clearAudio: $("clearAudio"),
   };
 
   let currentFile = null;
@@ -67,7 +68,9 @@
   let historyQuery = ""; // current history search filter
   let ownedAudioUrl = null; // object URL we created from IndexedDB (must revoke)
   let segSpans = []; // {span, start, end} for the clickable transcript
-  const AUDIO_KEEP = 20; // keep audio in IndexedDB only for the newest N entries
+  const AUDIO_KEEP = 10; // keep audio in IndexedDB for the newest N entries
+  const AUDIO_MAX_CLIP = 8 * 1024 * 1024; // don't store clips larger than this
+  const AUDIO_BUDGET = 40 * 1024 * 1024; // total audio kept on the device
   let currentAbort = null; // AbortController for the in-flight transcription
   let mediaRecorder = null; // MediaRecorder while recording
   let recChunks = [];
@@ -281,6 +284,7 @@
         name: currentFile.name || "voice-note",
         lang,
         at: Date.now(),
+        audioBytes: currentFile?.size || 0,
       });
       currentHistoryId = id;
       const words = Array.isArray(data.words) ? data.words : [];
@@ -328,18 +332,33 @@
       r.onerror = () => reject(r.error);
     });
   }
-  async function idbPut(rec) {
+  async function idbPutRaw(rec) {
+    const db = await idbOpen();
     try {
-      const db = await idbOpen();
       await new Promise((res, rej) => {
         const tx = db.transaction(AUDIO_STORE, "readwrite");
         tx.objectStore(AUDIO_STORE).put(rec);
         tx.oncomplete = res;
         tx.onerror = () => rej(tx.error);
       });
+    } finally {
       db.close();
+    }
+  }
+  async function idbPut(rec) {
+    // Oversized clips are never stored — click-to-seek isn't worth filling the
+    // device and starving the share-target write.
+    if (rec?.blob && rec.blob.size > AUDIO_MAX_CLIP) return;
+    try {
+      await idbPutRaw(rec);
     } catch {
-      /* IndexedDB unavailable — seek-on-history just won't work */
+      // Out of space: prune hard, then try once more.
+      await pruneAudio(true);
+      try {
+        await idbPutRaw(rec);
+      } catch {
+        /* storage full — this clip just won't be seekable later */
+      }
     }
   }
   async function idbGet(id) {
@@ -384,15 +403,37 @@
       return [];
     }
   }
-  // Keep audio only for the newest AUDIO_KEEP history entries.
-  async function pruneAudio() {
+  // Keep audio for the newest entries only, under a total byte budget. Decided
+  // from localStorage metadata so we never load blobs just to measure them.
+  async function pruneAudio(aggressive) {
     try {
-      const keep = new Set(
-        readHistory().sort((a, b) => b.at - a.at).slice(0, AUDIO_KEEP).map((e) => e.id),
-      );
+      const keepCount = aggressive ? Math.ceil(AUDIO_KEEP / 2) : AUDIO_KEEP;
+      const budget = aggressive ? AUDIO_BUDGET / 2 : AUDIO_BUDGET;
+      const keep = new Set();
+      let bytes = 0;
+      for (const e of readHistory().sort((a, b) => b.at - a.at)) {
+        const size = e.audioBytes || 0;
+        if (keep.size >= keepCount || bytes + size > budget) break;
+        keep.add(e.id);
+        bytes += size;
+      }
       for (const k of await idbKeys()) if (!keep.has(k)) await idbDelete(k);
     } catch {
       /* non-fatal */
+    }
+  }
+  async function clearStoredAudio() {
+    for (const k of await idbKeys()) await idbDelete(k);
+    toast("Spremljeni audio obrisan" + (await storageInfo()));
+  }
+  async function storageInfo() {
+    try {
+      const est = await navigator.storage?.estimate?.();
+      if (!est || !est.usage) return "";
+      const mb = (n) => (n / 1048576).toFixed(0) + " MB";
+      return ` (zauzeto ${mb(est.usage)}${est.quota ? " od " + mb(est.quota) : ""})`;
+    } catch {
+      return "";
     }
   }
 
@@ -862,24 +903,48 @@
   }
 
   // ---------- share target intake ----------
+  // The service worker reports why a share failed via ?err=…; show it instead of
+  // silently opening an empty app (the old behaviour, which looked like a no-op).
+  const SHARE_ERRORS = {
+    nofile:
+      "WhatsApp nije poslao audio datoteku — vjerojatno je podijeljen tekst, a ne sama glasovna poruka. Dugi pritisak na glasovnu poruku → ⋮ → Share → Glas, ili je uploadaj ručno.",
+    quota:
+      "Nema dovoljno slobodnog prostora na uređaju za primanje poruke. Tapni „Očisti spremljeni audio” u dnu, pa ponovi dijeljenje.",
+    badform:
+      "Nisam mogao pročitati podijeljenu datoteku. Pokušaj ponovno ili je uploadaj ručno.",
+    nosw:
+      "Service worker nije bio aktivan pa poruka nije primljena. Otvori Glas jednom da se osvježi, pa ponovi dijeljenje.",
+  };
+
   async function loadSharedAudio() {
     const params = new URLSearchParams(location.search);
     if (!params.has("shared")) return;
+    const err = params.get("err");
+    const note = params.get("note");
     // Clean the URL so a refresh doesn't re-trigger.
     history.replaceState({}, "", location.pathname);
 
+    if (err) {
+      const extra = err === "quota" ? await storageInfo() : "";
+      showError((SHARE_ERRORS[err] || "Dijeljenje nije uspjelo.") + extra);
+      return;
+    }
+    if (note === "freed") toast("Oslobodio sam prostor na uređaju");
+
     if (!navigator.serviceWorker?.controller) {
-      // Give the SW a brief moment to take control after first install.
-      await new Promise((r) => setTimeout(r, 400));
+      // Give the SW a brief moment to take control after an update/first install.
+      await new Promise((r) => setTimeout(r, 600));
     }
     const ctrl = navigator.serviceWorker?.controller;
     if (!ctrl) {
-      showError("Shared audio couldn't be read. Try uploading the file manually.");
+      showError(
+        "Ne mogu pročitati podijeljenu poruku jer service worker nije aktivan. Otvori Glas jednom (i zatvori ga), pa ponovi dijeljenje.",
+      );
       return;
     }
 
-    const file = await new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(null), 4000);
+    const msg = await new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 6000);
       const onMsg = (event) => {
         if (event.data?.type === "shared-audio") {
           clearTimeout(timeout);
@@ -891,12 +956,19 @@
       ctrl.postMessage("get-shared-audio");
     });
 
-    if (file?.file) {
-      const name = file.filename || "shared-voice-note.ogg";
-      const blob = file.file instanceof Blob ? file.file : new Blob([file.file]);
+    if (msg?.file) {
+      const name = msg.filename || "shared-voice-note.ogg";
+      const blob = msg.file instanceof Blob ? msg.file : new Blob([msg.file]);
       const f = new File([blob], name, { type: blob.type || "audio/ogg" });
       setFile(f, name);
       toast("Glasovna poruka primljena — prepisujem…");
+    } else if (msg) {
+      showError(
+        "Podijeljena poruka nije pronađena u međuspremniku. Ponovi dijeljenje — ako se ponavlja, tapni „Očisti spremljeni audio” u dnu." +
+          (await storageInfo()),
+      );
+    } else {
+      showError("Service worker nije odgovorio na vrijeme. Ponovi dijeljenje.");
     }
   }
 
@@ -1042,6 +1114,11 @@
   el.changeCode.addEventListener("click", () =>
     showUnlock("Unesi novi pristupni kôd."),
   );
+  el.clearAudio.addEventListener("click", async () => {
+    if (confirm("Obrisati spremljene snimke? Transkripti i sažeci ostaju — samo se gubi „poslušaj dio” za stare zapise.")) {
+      await clearStoredAudio();
+    }
+  });
 
   el.clearHistory.addEventListener("click", () => {
     if (confirm("Obrisati cijelu povijest?")) {
