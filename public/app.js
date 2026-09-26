@@ -10,7 +10,7 @@
   const PASS_KEY = "glas:passcode:v1";
   const NAME_KEY = "glas:username:v1";
   const DEVICE_KEY = "glas:deviceid:v1";
-  const ACCEPTED = /\.(opus|ogg|oga|m4a|mp3|wav|mp4|webm|aac|flac)$/i;
+  const ACCEPTED = /\.(opus|ogg|oga|m4a|mp3|wav|mp4|webm|aac|flac|amr|3gp|3gpp|caf|aiff?)$/i;
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -137,7 +137,8 @@
   function looksLikeAudio(file) {
     if (!file) return false;
     if (file.type && file.type.startsWith("audio/")) return true;
-    if (file.type === "video/mp4" || file.type === "application/ogg") return true; // m4a/ogg quirks
+    // Android mislabels voice notes as containers (video/mp4, application/ogg)
+    // or as raw bytes, so the extension is the reliable signal.
     return ACCEPTED.test(file.name || "");
   }
 
@@ -921,7 +922,7 @@
 
   const SHARE_ERRORS = {
     nofile:
-      "U dijeljenju nije bilo audio datoteke — Android je Glasu predao dijeljenje bez datoteke. Nije stvar tvojih koraka. Zaobilazno: spremi poruku (WhatsApp → ⋮ → Share → Files/Spremi) pa je uploadaj u Glas.",
+      "Android je Glasu predao dijeljenje bez same audio datoteke — nije stvar tvojih koraka. Tapni gumb ispod: glasovna poruka je već na uređaju (Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Voice Notes), ne treba je nigdje spremati.",
     quota:
       "Nema dovoljno slobodnog prostora na uređaju za primanje poruke. Tapni „Očisti spremljeni audio” u dnu, pa ponovi dijeljenje.",
     badform:
