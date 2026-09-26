@@ -34,7 +34,7 @@ database, no second service, no CORS.
 │   ├── index.html
 │   ├── styles.css
 │   ├── app.js
-│   ├── manifest.webmanifest   # PWA manifest + share_target
+│   ├── glas.webmanifest      # PWA manifest + share_target
 │   ├── sw.js                  # service worker: offline shell + share intake
 │   └── icons/                 # generated PWA icons
 ├── .env.example               # documents ELEVENLABS_API_KEY (safe to commit)

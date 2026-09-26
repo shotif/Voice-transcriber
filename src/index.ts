@@ -114,7 +114,7 @@ function handleHealth(env: Env): Response {
   return json({
     ok: true,
     route: "/api/transcribe",
-    api_version: "sharefix-v11", // canary: confirms latest deploy
+    api_version: "sharefix-v12", // canary: confirms latest deploy
     accepts: "multipart 'file' field OR raw audio body; ?format=text for plain text",
     method: "POST multipart/form-data (field: file)",
     model_id: env.ELEVENLABS_MODEL_ID || DEFAULT_MODEL_ID,
