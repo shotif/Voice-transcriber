@@ -907,7 +907,7 @@
   // silently opening an empty app (the old behaviour, which looked like a no-op).
   const SHARE_ERRORS = {
     nofile:
-      "WhatsApp nije poslao audio datoteku — vjerojatno je podijeljen tekst, a ne sama glasovna poruka. Dugi pritisak na glasovnu poruku → ⋮ → Share → Glas, ili je uploadaj ručno.",
+      "U dijeljenju nije bilo audio datoteke — Android je Glasu predao dijeljenje bez datoteke. Nije stvar tvojih koraka. Zaobilazno: spremi poruku (WhatsApp → ⋮ → Share → Files/Spremi) pa je uploadaj u Glas.",
     quota:
       "Nema dovoljno slobodnog prostora na uređaju za primanje poruke. Tapni „Očisti spremljeni audio” u dnu, pa ponovi dijeljenje.",
     badform:
@@ -926,7 +926,12 @@
 
     if (err) {
       const extra = err === "quota" ? await storageInfo() : "";
-      showError((SHARE_ERRORS[err] || "Dijeljenje nije uspjelo.") + extra);
+      const got = params.get("got");
+      showError(
+        (SHARE_ERRORS[err] || "Dijeljenje nije uspjelo.") +
+          extra +
+          (got ? "\n\nPrimljeno u dijeljenju: " + got : ""),
+      );
       return;
     }
     if (note === "freed") toast("Oslobodio sam prostor na uređaju");

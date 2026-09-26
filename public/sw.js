@@ -3,7 +3,7 @@
  * 2. Web Share Target: receives a POSTed audio file from Android's share sheet,
  *    stashes it in the Cache, and redirects into the transcribe flow.
  */
-const VERSION = "glas-v8";
+const VERSION = "glas-v9";
 const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = "glas-share"; // holds the most recently shared audio
 const SHARED_AUDIO_URL = "/__shared-audio"; // internal cache key, never fetched from network
@@ -110,15 +110,50 @@ async function stashShared(file) {
   await cache.put(SHARED_AUDIO_URL, new Response(file, { headers }));
 }
 
+// Take the first file-like value with actual bytes, whatever the field is
+// named — Android/Chrome don't always use the manifest's declared field name.
+function pickSharedFile(formData) {
+  let found = null;
+  try {
+    formData.forEach((v) => {
+      if (found) return;
+      if (v && typeof v === "object" && typeof v.size === "number" && v.size > 0)
+        found = v;
+    });
+  } catch {
+    /* ignore */
+  }
+  return found;
+}
+
+// Compact description of what actually arrived, so a failed share can report
+// the truth instead of a guess.
+function describeForm(formData) {
+  const parts = [];
+  try {
+    formData.forEach((v, k) => {
+      if (parts.length >= 8) return;
+      if (v && typeof v === "object" && typeof v.size === "number") {
+        parts.push(`${k}=file/${v.size}B/${v.type || "?"}`);
+      } else {
+        parts.push(`${k}=text/${String(v ?? "").length}`);
+      }
+    });
+  } catch {
+    /* ignore */
+  }
+  return parts.length ? parts.join(", ").slice(0, 300) : "(prazna forma)";
+}
+
 async function handleShare(request) {
   // Never fail silently: the reason travels back on the redirect so the page can
   // tell the user what happened instead of just opening empty.
   let params = "?shared=1";
   try {
     const formData = await request.formData();
-    const file = formData.get("audio") || formData.get("file");
-    if (!file || typeof file.size !== "number" || file.size === 0) {
-      params += "&err=nofile";
+    const file = pickSharedFile(formData);
+    if (!file) {
+      params += "&err=nofile&got=" + encodeURIComponent(describeForm(formData));
     } else {
       try {
         await stashShared(file);

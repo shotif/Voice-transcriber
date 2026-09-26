@@ -235,6 +235,9 @@ audio { width: 100%; margin-bottom: 12px; }
   color: #fecaca;
   font-size: 0.92rem;
   line-height: 1.5;
+  white-space: pre-wrap; /* diagnostics are sent on their own line */
+  word-break: break-word;
+  user-select: text;
 }
 
 /* Spinner */
