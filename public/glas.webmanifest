@@ -54,13 +54,9 @@
             "audio/webm",
             "audio/wav",
             "audio/x-wav",
-            "audio/vnd.wave",
             "application/ogg",
-            "video/ogg",
             "video/mp4",
             "video/3gpp",
-            "application/octet-stream",
-            "*/*",
             ".opus",
             ".ogg",
             ".oga",
@@ -69,9 +65,7 @@
             ".wav",
             ".aac",
             ".amr",
-            ".3gp",
-            ".webm",
-            ".mp4"
+            ".3gp"
           ]
         }
       ]
