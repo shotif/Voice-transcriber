@@ -118,8 +118,17 @@
     return ` · ${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
   }
 
-  function showError(msg) {
+  function showError(msg, action) {
     el.error.textContent = msg;
+    // Optional one-tap way out, so a failed share never leaves a dead end.
+    if (action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-btn error-action";
+      btn.textContent = action.label;
+      btn.addEventListener("click", action.onClick);
+      el.error.appendChild(btn);
+    }
     show(el.error);
     hide(el.loading);
   }
@@ -905,6 +914,11 @@
   // ---------- share target intake ----------
   // The service worker reports why a share failed via ?err=…; show it instead of
   // silently opening an empty app (the old behaviour, which looked like a no-op).
+  const PICK_FILE_ACTION = {
+    label: "Odaberi datoteku",
+    onClick: () => el.fileInput.click(),
+  };
+
   const SHARE_ERRORS = {
     nofile:
       "U dijeljenju nije bilo audio datoteke — Android je Glasu predao dijeljenje bez datoteke. Nije stvar tvojih koraka. Zaobilazno: spremi poruku (WhatsApp → ⋮ → Share → Files/Spremi) pa je uploadaj u Glas.",
@@ -931,6 +945,7 @@
         (SHARE_ERRORS[err] || "Dijeljenje nije uspjelo.") +
           extra +
           (got ? "\n\nPrimljeno u dijeljenju: " + got : ""),
+        PICK_FILE_ACTION,
       );
       return;
     }
@@ -944,6 +959,7 @@
     if (!ctrl) {
       showError(
         "Ne mogu pročitati podijeljenu poruku jer service worker nije aktivan. Otvori Glas jednom (i zatvori ga), pa ponovi dijeljenje.",
+        PICK_FILE_ACTION,
       );
       return;
     }
@@ -971,9 +987,13 @@
       showError(
         "Podijeljena poruka nije pronađena u međuspremniku. Ponovi dijeljenje — ako se ponavlja, tapni „Očisti spremljeni audio” u dnu." +
           (await storageInfo()),
+        PICK_FILE_ACTION,
       );
     } else {
-      showError("Service worker nije odgovorio na vrijeme. Ponovi dijeljenje.");
+      showError(
+        "Service worker nije odgovorio na vrijeme. Ponovi dijeljenje.",
+        PICK_FILE_ACTION,
+      );
     }
   }
 

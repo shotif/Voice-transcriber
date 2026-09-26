@@ -240,6 +240,12 @@ audio { width: 100%; margin-bottom: 12px; }
   user-select: text;
 }
 
+/* One-tap way out of a failed share. */
+.error-action {
+  display: block;
+  margin-top: 12px;
+}
+
 /* Spinner */
 .spinner {
   width: 34px;
